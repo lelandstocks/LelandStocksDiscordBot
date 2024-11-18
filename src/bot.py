@@ -7,6 +7,8 @@ import json
 import pandas as pd
 from pytz import timezone
 from dotenv import load_dotenv
+import matplotlib.pyplot as plt
+import io
 
 # Load environment variables from .env file
 load_dotenv()
@@ -46,9 +48,8 @@ def get_latest_in_time_leaderboard():
     files = [f for f in os.listdir(in_time_dir) if f.endswith(".json")]
     if not files:
         return None
-    latest_file = max(
-        files, key=lambda x: os.path.getctime(os.path.join(in_time_dir, x))
-    )
+    files.sort(key=lambda x: parse_leaderboard_timestamp(x))
+    latest_file = files[-1]
     return os.path.join(in_time_dir, latest_file)
 
 
@@ -121,6 +122,111 @@ with open("./lelandstocks.github.io/backend/portfolios/usernames.txt", "r") as f
     usernames_list = [line.strip() for line in f.readlines()]
 
 
+def parse_leaderboard_timestamp(filename):
+    """
+    Parse the datetime from a leaderboard filename.
+
+    Filename format: leaderboard-YYYY-MM-DD-HH_MM.json
+    """
+    timestamp_str = filename[len('leaderboard-'):-len('.json')]
+    return datetime.datetime.strptime(timestamp_str, '%Y-%m-%d-%H_%M')
+
+
+def generate_money_graph(username):
+    """Generate a graph showing money over time for a user"""
+    # Get all files from in_time directory and sort them by datetime
+    in_time_dir = "./lelandstocks.github.io/backend/leaderboards/in_time"
+    files = [f for f in os.listdir(in_time_dir) if f.endswith('.json')]
+    files.sort(key=lambda x: parse_leaderboard_timestamp(x))
+    
+    # Create DataFrame to store all users' data
+    data = {
+        'timestamp': [],
+        username: [],  # Target user
+    }
+    
+    # Get initial data to find top competitors
+    with open(os.path.join(in_time_dir, files[-1]), 'r') as f:
+        latest_data = json.load(f)
+    
+    # Get top 3 users (excluding target user) for comparison
+    sorted_users = sorted(latest_data.items(), key=lambda x: float(x[1][0]), reverse=True)
+    competitors = [user[0] for user in sorted_users if user[0] != username][:3]
+    
+    # Add competitors to data dictionary
+    for competitor in competitors:
+        data[competitor] = []
+    
+    # Collect data for all users
+    for file in files:
+        try:
+            with open(os.path.join(in_time_dir, file), 'r') as f:
+                file_data = json.load(f)
+                timestamp = parse_leaderboard_timestamp(file)
+                data['timestamp'].append(timestamp)
+                
+                # Get target user's data
+                data[username].append(float(file_data.get(username, [0])[0]))
+                
+                # Get competitors' data
+                for competitor in competitors:
+                    data[competitor].append(float(file_data.get(competitor, [0])[0]))
+                    
+        except Exception as e:
+            print(f"Error reading file {file}: {e}")
+            continue
+    
+    if not data['timestamp']:
+        return None
+    
+    # Create the plot with improved styling
+    plt.style.use('seaborn-darkgrid')
+    plt.figure(figsize=(12, 6))
+    
+    # Plot competitors with thin grey lines
+    for competitor in competitors:
+        plt.plot(data['timestamp'], data[competitor], 
+                marker='', color='grey', linewidth=1, alpha=0.4,
+                label=competitor)
+    
+    # Plot target user with thick highlighted line
+    plt.plot(data['timestamp'], data[username],
+            marker='o', color='orange', linewidth=3, alpha=0.8,
+            markerfacecolor='orange', markersize=6,
+            label=f"{username} (Main)")
+    
+    # Customize the plot
+    plt.title(f"Money Over Time - {username} vs Top Competitors", 
+              loc='left', fontsize=12, fontweight='bold', color='orange')
+    plt.xlabel("Time")
+    plt.ylabel("Money ($)")
+    plt.grid(True, alpha=0.3)
+    plt.xticks(rotation=45)
+    
+    # Add annotations for final values
+    last_timestamp = data['timestamp'][-1]
+    for user in [username] + competitors:
+        final_value = data[user][-1]
+        plt.text(last_timestamp, final_value, f' {user}\n ${final_value:,.2f}', 
+                verticalalignment='center', fontsize=8)
+    
+    plt.tight_layout()
+    
+    # Save plot to bytes buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    buf.seek(0)
+    plt.close()
+    
+    return buf
+
+
+def get_embed_color():
+    """Get the appropriate embed color based on testing mode"""
+    testing = os.environ.get('TESTING', 'false').lower() == 'true'
+    print(testing)
+    return 0xFF69B4 if testing else 0x0000FF  # Using hex values directly: hot pink (#FF69B4) and blue (#0000FF)
+
 class UserInfo(commands.Cog):
     """
     Cog to handle user information related commands.
@@ -135,7 +241,14 @@ class UserInfo(commands.Cog):
         """
         Respond to the /userinfo command with the user's information.
         """
-        await interaction.response.defer()
+        try:
+            # Defer the response immediately
+            await interaction.response.defer(thinking=True)
+        except Exception as e:
+            # If deferring fails, log the error and exit
+            print(f"Failed to defer interaction: {e}")
+            return
+
         try:
             with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
                 data = json.load(file)
@@ -155,7 +268,7 @@ class UserInfo(commands.Cog):
 
             user_name, user_money, user_holdings = user_info
             embed = discord.Embed(
-                colour=discord.Colour.blue(),
+                colour=get_embed_color(),
                 title=f"Information for {user_name}",
                 description=(
                     f"**Current Money:** {user_money}\n\n"
@@ -163,9 +276,21 @@ class UserInfo(commands.Cog):
                 ),
                 timestamp=get_pst_time(),
             )
-            await interaction.followup.send(embed=embed)
+            
+            # Generate and add the graph
+            graph_buffer = generate_money_graph(username)
+            if graph_buffer:
+                file = discord.File(graph_buffer, filename="money_graph.png")
+                embed.set_image(url="attachment://money_graph.png")
+                await interaction.followup.send(embed=embed, file=file)
+            else:
+                await interaction.followup.send(embed=embed)
+                
         except Exception as e:
-            await interaction.followup.send(f"Error fetching user info: {str(e)}")
+            print(f"Error in userinfo command: {e}")
+            # Check if the interaction is still valid
+            if not interaction.followup.is_done():
+                await interaction.followup.send(f"Error fetching user info: {str(e)}")
 
     @userinfo.autocomplete("username")
     async def username_autocomplete(
@@ -231,7 +356,7 @@ async def leaderboard(interaction: discord.Interaction, count: int = 1):
             description += f"Holdings:\n{user_stocks}\n\n"
 
         embed = discord.Embed(
-            colour=discord.Colour.dark_red(),
+            colour=get_embed_color(),  # Changed this line
             title="Current Leaderboard",
             description=description,
             timestamp=get_pst_time(),
@@ -289,7 +414,7 @@ async def send_leaderboard():
                         # Only send message if money has changed
                         if leaderboard_channel and prev_top_money != top_ranked_money:
                             embed = discord.Embed(
-                                colour=discord.Colour.dark_red(),
+                                colour=get_embed_color(),  # Changed this line
                                 title="Leaderboard Update!",
                                 description=(
                                     f"**Top Ranked Person:** {top_ranked_name}\n\n"
@@ -404,7 +529,7 @@ async def send_daily_summary():
 
             if stats["performance"]:
                 embed = discord.Embed(
-                    colour=discord.Colour.gold(),
+                    colour=get_embed_color(),  # Changed this line
                     title="📊 End of Day Trading Summary",
                     description=f"Market Close Summary for {now.strftime('%A, %B %d, %Y')}",
                     timestamp=get_pst_time(),
