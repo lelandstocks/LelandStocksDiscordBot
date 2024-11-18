@@ -42,7 +42,7 @@ def get_latest_in_time_leaderboard():
     """
     Get the most recent leaderboard file from the in_time directory.
     """
-    in_time_dir = "./backend/leaderboards/in_time"
+    in_time_dir = "./lelandstocks.github.io/backend/leaderboards/in_time"
     files = [f for f in os.listdir(in_time_dir) if f.endswith(".json")]
     if not files:
         return None
@@ -63,10 +63,10 @@ async def compare_stock_changes(channel):
     """
     try:
         # Load the snapshot file
-        snapshot_path = "./backend/leaderboards/snapshots/leaderboard-snapshot.json"
+        snapshot_path = "./snapshots/leaderboard-snapshot.json"
         if not os.path.exists(snapshot_path):
             # If snapshot doesn't exist, create it and return
-            with open("./backend/leaderboards/leaderboard-latest.json", "r") as f:
+            with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
                 current_data = json.load(f)
             with open(snapshot_path, "w") as f:
                 json.dump(current_data, f)
@@ -75,7 +75,7 @@ async def compare_stock_changes(channel):
         # Load both snapshot and current data
         with open(snapshot_path, "r") as f:
             previous_data = json.load(f)
-        with open("./backend/leaderboards/leaderboard-latest.json", "r") as f:
+        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
             current_data = json.load(f)
         # Compare holdings for each user
         for username in current_data:
@@ -117,7 +117,7 @@ async def compare_stock_changes(channel):
 
 
 # Load usernames from file
-with open("./backend/portfolios/usernames.txt", "r") as f:
+with open("./lelandstocks.github.io/backend/portfolios/usernames.txt", "r") as f:
     usernames_list = [line.strip() for line in f.readlines()]
 
 
@@ -137,7 +137,7 @@ class UserInfo(commands.Cog):
         """
         await interaction.response.defer()
         try:
-            with open("./backend/leaderboards/leaderboard-latest.json", "r") as file:
+            with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
                 data = json.load(file)
             df = pd.DataFrame.from_dict(data, orient="index")
             df.reset_index(inplace=True)
@@ -206,7 +206,7 @@ async def leaderboard(interaction: discord.Interaction, count: int = 1):
     """
     await interaction.response.defer()
     try:
-        with open("./backend/leaderboards/leaderboard-latest.json", "r") as file:
+        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
             data = json.load(file)
         df = pd.DataFrame.from_dict(data, orient="index")
         df.reset_index(inplace=True)
@@ -253,7 +253,7 @@ async def send_leaderboard():
         if start_time <= now <= end_time:
             try:
                 with open(
-                    "./backend/leaderboards/leaderboard-latest.json", "r"
+                    "./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r"
                 ) as file:
                     data = json.load(file)
                 df = pd.DataFrame.from_dict(data, orient="index")
@@ -354,7 +354,7 @@ async def create_morning_snapshot():
     """Create a snapshot of the leaderboard at market open"""
     try:
         morning_snapshot_path = "./backend/leaderboards/snapshots/morning-snapshot.json"
-        with open("./backend/leaderboards/leaderboard-latest.json", "r") as f:
+        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
             current_data = json.load(f)
         with open(morning_snapshot_path, "w") as f:
             json.dump(current_data, f)
@@ -388,7 +388,7 @@ async def send_daily_summary():
                 morning_data = json.load(f)
 
             # Load end of day data
-            with open("./backend/leaderboards/leaderboard-latest.json", "r") as f:
+            with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
                 current_data = json.load(f)
 
             # Calculate performance using morning data
