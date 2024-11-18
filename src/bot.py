@@ -252,45 +252,53 @@ async def send_leaderboard():
         end_time = now.replace(hour=16, minute=15, second=0, microsecond=0)
         if start_time <= now <= end_time:
             try:
-                with open(
-                    "./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r"
-                ) as file:
+                # Load current data
+                with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
                     data = json.load(file)
                 df = pd.DataFrame.from_dict(data, orient="index")
                 df.reset_index(inplace=True)
-                df.columns = [
-                    "Account Name",
-                    "Money In Account",
-                    "Investopedia Link",
-                    "Stocks Invested In",
-                ]
+                df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
                 df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
-                top_ranked_name, top_ranked_money, top_ranked_stocks = get_user_info(
-                    df, df.iloc[0]["Account Name"]
-                )
-                leaderboard_channel_id = int(
-                    os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")
-                )
+                # Get channels
+                leaderboard_channel_id = int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard"))
                 stocks_channel_id = int(os.environ.get("DISCORD_CHANNEL_ID_Stocks"))
                 leaderboard_channel = bot.get_channel(leaderboard_channel_id)
                 stocks_channel = bot.get_channel(stocks_channel_id)
 
-                if leaderboard_channel:
-                    embed = discord.Embed(
-                        colour=discord.Colour.dark_red(),
-                        title="Leaderboard Update!",
-                        description=(
-                            f"**Top Ranked Person:** {top_ranked_name}\n\n"
-                            f"**Current Money:** {top_ranked_money}\n\n"
-                            f"**Current Holdings:**\n{top_ranked_stocks}"
-                        ),
-                        timestamp=get_pst_time(),
-                    )
-                    await leaderboard_channel.send(embed=embed)
-
+                # Check stocks changes regardless of leaderboard changes
                 if stocks_channel:
                     await compare_stock_changes(stocks_channel)
+
+                # Get top ranked person's data
+                top_ranked_name, top_ranked_money, top_ranked_stocks = get_user_info(df, df.iloc[0]["Account Name"])
+
+                # Load previous data from snapshot
+                snapshot_path = "./snapshots/leaderboard-snapshot.json"
+                if os.path.exists(snapshot_path):
+                    with open(snapshot_path, "r") as f:
+                        prev_data = json.load(f)
+                        prev_df = pd.DataFrame.from_dict(prev_data, orient="index")
+                        prev_df.reset_index(inplace=True)
+                        prev_df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
+                        prev_df.sort_values(by="Money In Account", ascending=False, inplace=True)
+                        
+                        # Get previous top money
+                        prev_top_name, prev_top_money, _ = get_user_info(prev_df, prev_df.iloc[0]["Account Name"])
+                        
+                        # Only send message if money has changed
+                        if leaderboard_channel and prev_top_money != top_ranked_money:
+                            embed = discord.Embed(
+                                colour=discord.Colour.dark_red(),
+                                title="Leaderboard Update!",
+                                description=(
+                                    f"**Top Ranked Person:** {top_ranked_name}\n\n"
+                                    f"**Current Money:** {top_ranked_money}\n\n"
+                                    f"**Current Holdings:**\n{top_ranked_stocks}"
+                                ),
+                                timestamp=get_pst_time(),
+                            )
+                            await leaderboard_channel.send(embed=embed)
 
             except Exception as e:
                 print(f"Error in send_leaderboard: {str(e)}")
