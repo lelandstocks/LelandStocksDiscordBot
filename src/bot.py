@@ -134,6 +134,8 @@ def parse_leaderboard_timestamp(filename):
 
 def generate_money_graph(username):
     """Generate a graph showing money over time for a user"""
+    import numpy as np
+    
     # Get all files from in_time directory and sort them by datetime
     in_time_dir = "./lelandstocks.github.io/backend/leaderboards/in_time"
     files = [f for f in os.listdir(in_time_dir) if f.endswith('.json')]
@@ -163,44 +165,82 @@ def generate_money_graph(username):
             with open(os.path.join(in_time_dir, file), 'r') as f:
                 file_data = json.load(f)
                 timestamp = parse_leaderboard_timestamp(file)
+                
+                # Check if data exists for all users
+                if username not in file_data or any(comp not in file_data for comp in competitors):
+                    continue  # Skip this timestamp
+                
+                # Append timestamp and data
                 data['timestamp'].append(timestamp)
-                
-                # Get target user's data
-                data[username].append(float(file_data.get(username, [0])[0]))
-                
-                # Get competitors' data
+                data[username].append(float(file_data[username][0]))
                 for competitor in competitors:
-                    data[competitor].append(float(file_data.get(competitor, [0])[0]))
-                    
+                    data[competitor].append(float(file_data[competitor][0]))
         except Exception as e:
             print(f"Error reading file {file}: {e}")
             continue
     
     if not data['timestamp']:
-        return None
+        return None, None, None  # Return None for buffer and both values
     
-    # Create the plot with improved styling
-    plt.style.use('seaborn-darkgrid')
+    # Convert data to numpy arrays and filter out zeros
+    timestamps = np.array(data['timestamp'])
+    user_values = np.array(data[username])
+    
+    # Create mask for non-zero values
+    valid_mask = user_values > 0
+    
+    # Create similar masks for competitors
+    competitor_masks = []
+    for competitor in competitors:
+        comp_values = np.array(data[competitor])
+        comp_mask = comp_values > 0
+        competitor_masks.append(comp_mask)
+    
+    # Combine all masks
+    combined_mask = valid_mask
+    for mask in competitor_masks:
+        combined_mask = combined_mask & mask  # Logical AND to ensure alignment
+    
+    # Apply the combined mask to all users and timestamps
+    data['timestamp'] = list(timestamps[combined_mask])
+    data[username] = list(user_values[combined_mask])
+    for i, competitor in enumerate(competitors):
+        comp_values = np.array(data[competitor])
+        data[competitor] = list(comp_values[combined_mask])
+    
+    # Find the lowest value and its timestamp
+    if data[username]:
+        lowest_value_index = np.argmin(data[username])
+        lowest_value = data[username][lowest_value_index]
+        lowest_timestamp = data['timestamp'][lowest_value_index]
+    else:
+        return None, None  # No data to plot
+    
+    # Find the highest value and its timestamp
+    highest_value_index = np.argmax(data[username])
+    highest_value = data[username][highest_value_index]
+    highest_timestamp = data['timestamp'][highest_value_index]
+    
+    # Plotting with basic style
+    plt.style.use('default')  # Use default style instead of seaborn
     plt.figure(figsize=(12, 6))
     
-    # Plot competitors with thin grey lines
+    # Plot competitors with improved visibility
     for competitor in competitors:
         plt.plot(data['timestamp'], data[competitor], 
-                marker='', color='grey', linewidth=1, alpha=0.4,
-                label=competitor)
+                 marker='', color='gray', linewidth=1.5, alpha=0.5, label=competitor)
     
-    # Plot target user with thick highlighted line
+    # Plot target user with distinctive line
     plt.plot(data['timestamp'], data[username],
-            marker='o', color='orange', linewidth=3, alpha=0.8,
-            markerfacecolor='orange', markersize=6,
-            label=f"{username} (Main)")
+             marker='o', color='blue', linewidth=2.5, alpha=0.8,
+             markerfacecolor='blue', markersize=5, label=f"{username} (Main)")
     
     # Customize the plot
     plt.title(f"Money Over Time - {username} vs Top Competitors", 
-              loc='left', fontsize=12, fontweight='bold', color='orange')
+              loc='left', fontsize=12, fontweight='bold')
     plt.xlabel("Time")
     plt.ylabel("Money ($)")
-    plt.grid(True, alpha=0.3)
+    plt.grid(True, alpha=0.2)
     plt.xticks(rotation=45)
     
     # Add annotations for final values
@@ -208,18 +248,44 @@ def generate_money_graph(username):
     for user in [username] + competitors:
         final_value = data[user][-1]
         plt.text(last_timestamp, final_value, f' {user}\n ${final_value:,.2f}', 
-                verticalalignment='center', fontsize=8)
+                 verticalalignment='center', fontsize=8)
     
+    # Plot and annotate the lowest point
+    plt.scatter([lowest_timestamp], [lowest_value], color='red', zorder=5, s=100)
+    plt.annotate(
+        f'Lowest: ${lowest_value:,.2f}',
+        xy=(lowest_timestamp, lowest_value),
+        xytext=(10, -20),
+        textcoords='offset points',
+        ha='left',
+        color='red',
+        fontweight='bold',
+        bbox=dict(facecolor='white', edgecolor='red', alpha=0.7, pad=2)
+    )
+    
+    # Plot and annotate the highest point
+    plt.scatter([highest_timestamp], [highest_value], color='green', zorder=5, s=100)
+    plt.annotate(
+        f'Highest: ${highest_value:,.2f}',
+        xy=(highest_timestamp, highest_value),
+        xytext=(10, 20),
+        textcoords='offset points',
+        ha='left',
+        color='green',
+        fontweight='bold',
+        bbox=dict(facecolor='white', edgecolor='green', alpha=0.7, pad=2)
+    )
+    
+    plt.legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     plt.tight_layout()
     
     # Save plot to bytes buffer
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='white')
     buf.seek(0)
     plt.close()
     
-    return buf
-
+    return buf, lowest_value, highest_value  # Return buffer and both extreme values
 
 def get_embed_color():
     """Get the appropriate embed color based on testing mode"""
@@ -278,19 +344,33 @@ class UserInfo(commands.Cog):
             )
             
             # Generate and add the graph
-            graph_buffer = generate_money_graph(username)
-            if graph_buffer:
-                file = discord.File(graph_buffer, filename="money_graph.png")
-                embed.set_image(url="attachment://money_graph.png")
-                await interaction.followup.send(embed=embed, file=file)
-            else:
+            try:
+                graph_buffer, lowest_value, highest_value = generate_money_graph(username)
+                if graph_buffer:
+                    file = discord.File(graph_buffer, filename="money_graph.png")
+                    embed.set_image(url="attachment://money_graph.png")
+                    if lowest_value is not None and highest_value is not None:
+                        embed.add_field(
+                            name="📈 Highest Value",
+                            value=f"${highest_value:,.2f}",
+                            inline=True,
+                        )
+                        embed.add_field(
+                            name="📉 Lowest Value",
+                            value=f"${lowest_value:,.2f}",
+                            inline=True,
+                        )
+                    await interaction.followup.send(embed=embed, file=file)
+                else:
+                    await interaction.followup.send(embed=embed)
+            except Exception as graph_error:
+                print(f"Error generating graph: {graph_error}")
+                # If graph fails, still send the basic embed
                 await interaction.followup.send(embed=embed)
                 
         except Exception as e:
             print(f"Error in userinfo command: {e}")
-            # Check if the interaction is still valid
-            if not interaction.followup.is_done():
-                await interaction.followup.send(f"Error fetching user info: {str(e)}")
+            await interaction.followup.send(f"Error fetching user info: {str(e)}")
 
     @userinfo.autocomplete("username")
     async def username_autocomplete(
