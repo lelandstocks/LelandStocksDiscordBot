@@ -158,6 +158,9 @@ def generate_money_graph(username):
         initial_spy_price = spy['Close'].iloc[0]
         spy_returns = spy['Close'] / initial_spy_price
         spy_values = 100000 * spy_returns
+        # Convert user's timestamps to timezone-aware
+        start_date = start_date.replace(tzinfo=spy.index.tz)
+        end_date = end_date.replace(tzinfo=spy.index.tz)
         # Filter S&P 500 data to match the user's date range
         spy = spy.loc[start_date:end_date]
         spy_values = spy_values.loc[start_date:end_date]
@@ -182,7 +185,7 @@ def generate_money_graph(username):
                     continue
                 
                 # Append data
-                data['timestamp'].append(timestamp)
+                data['timestamp'].append(timestamp.replace(tzinfo=spy.index.tz))
                 data[username].append(float(file_data[username][0]))
                 
         except Exception as e:
