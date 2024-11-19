@@ -274,7 +274,6 @@ def generate_money_graph(username):
 def get_embed_color():
     """Get the appropriate embed color based on testing mode"""
     testing = os.environ.get('TESTING', 'false').lower() == 'true'
-    print(testing)
     return 0xFF69B4 if testing else 0x0000FF  # Using hex values directly: hot pink (#FF69B4) and blue (#0000FF)
 
 class UserInfo(commands.Cog):
@@ -430,133 +429,100 @@ async def leaderboard(interaction: discord.Interaction, count: int = 1):
         await interaction.followup.send(f"Error fetching leaderboard: {str(e)}")
 
 
+def have_rankings_changed(previous_data, current_data):
+    """
+    Compare previous and current data to check if rankings have changed.
+    Returns True if rankings changed, False otherwise.
+    """
+    if not previous_data or not current_data:
+        return True
+    
+    # Convert both datasets into sorted lists of (username, money) tuples
+    prev_rankings = [(name, float(data[0])) for name, data in previous_data.items()]
+    curr_rankings = [(name, float(data[0])) for name, data in current_data.items()]
+    
+    # Sort by money in descending order
+    prev_rankings.sort(key=lambda x: x[1], reverse=True)
+    curr_rankings.sort(key=lambda x: x[1], reverse=True)
+    
+    # Compare top 10 rankings
+    return prev_rankings[:10] != curr_rankings[:10]
+
 @tasks.loop(minutes=1)
 async def send_leaderboard():
     """
-    Periodically send the leaderboard update to the Discord channels during trading hours.
+    Send leaderboard updates only at market open/close or when rankings change.
     """
     now = datetime.datetime.now(timezone("US/Eastern"))
-    if now.weekday() < 5:
-        start_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        end_time = now.replace(hour=16, minute=15, second=0, microsecond=0)
-        if start_time <= now <= end_time:
-            try:
-                # Load current data
-                with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
-                    data = json.load(file)
-                df = pd.DataFrame.from_dict(data, orient="index")
-                df.reset_index(inplace=True)
-                df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
-                df.sort_values(by="Money In Account", ascending=False, inplace=True)
-
-                # Get channels
-                leaderboard_channel_id = int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard"))
-                stocks_channel_id = int(os.environ.get("DISCORD_CHANNEL_ID_Stocks"))
-                leaderboard_channel = bot.get_channel(leaderboard_channel_id)
-                stocks_channel = bot.get_channel(stocks_channel_id)
-
-                # Check stocks changes regardless of leaderboard changes
-                if stocks_channel:
-                    await compare_stock_changes(stocks_channel)
-
-                # Get top ranked person's data
-                top_ranked_name, top_ranked_money, top_ranked_stocks = get_user_info(df, df.iloc[0]["Account Name"])
-
-                # Load previous data from snapshot
-                snapshot_path = "./snapshots/leaderboard-snapshot.json"
-                if os.path.exists(snapshot_path):
-                    with open(snapshot_path, "r") as f:
-                        prev_data = json.load(f)
-                        prev_df = pd.DataFrame.from_dict(prev_data, orient="index")
-                        prev_df.reset_index(inplace=True)
-                        prev_df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
-                        prev_df.sort_values(by="Money In Account", ascending=False, inplace=True)
-                        
-                        # Get previous top money
-                        prev_top_name, prev_top_money, _ = get_user_info(prev_df, prev_df.iloc[0]["Account Name"])
-                        
-                        # Only send message if money has changed
-                        if leaderboard_channel and prev_top_money != top_ranked_money:
-                            embed = discord.Embed(
-                                colour=get_embed_color(),  # Changed this line
-                                title="Leaderboard Update!",
-                                description=(
-                                    f"**Top Ranked Person:** {top_ranked_name}\n\n"
-                                    f"**Current Money:** {top_ranked_money}\n\n"
-                                    f"**Current Holdings:**\n{top_ranked_stocks}"
-                                ),
-                                timestamp=get_pst_time(),
-                            )
-                            await leaderboard_channel.send(embed=embed)
-
-            except Exception as e:
-                print(f"Error in send_leaderboard: {str(e)}")
-
-
-def calculate_daily_performance(previous_data, current_data):
-    """Calculate performance metrics for all users over the day"""
-    performance = []
-    total_trades = 0
-    biggest_gain = {"username": "", "amount": 0, "percent": 0}
-    biggest_loss = {"username": "", "amount": 0, "percent": 0}
-
-    for username in current_data:
-        if username in previous_data:
-            prev_money = float(previous_data[username][0])
-            curr_money = float(current_data[username][0])
-            trades = set(stock[0] for stock in current_data[username][2]) ^ set(
-                stock[0] for stock in previous_data[username][2]
-            )
-            trade_count = len(trades)
-            total_trades += trade_count
-
-            change_amount = curr_money - prev_money
-            percent_change = (change_amount / prev_money) * 100
-
-            # Track biggest single gain/loss
-            if percent_change > biggest_gain["percent"]:
-                biggest_gain = {
-                    "username": username,
-                    "amount": change_amount,
-                    "percent": percent_change,
-                }
-            if percent_change < biggest_loss["percent"]:
-                biggest_loss = {
-                    "username": username,
-                    "amount": change_amount,
-                    "percent": percent_change,
-                }
-
-            performance.append(
-                {
-                    "username": username,
-                    "change_amount": change_amount,
-                    "change_percent": percent_change,
-                    "trades": trade_count,
-                }
-            )
-
-    return {
-        "performance": sorted(
-            performance, key=lambda x: x["change_percent"], reverse=True
-        ),
-        "total_trades": total_trades,
-        "biggest_gain": biggest_gain,
-        "biggest_loss": biggest_loss,
-        "most_active": sorted(performance, key=lambda x: x["trades"], reverse=True)[:3],
-    }
-
-
-async def create_morning_snapshot():
-    """Create a snapshot of the leaderboard at market open"""
+    if now.weekday() >= 5:  # Skip weekends
+        return
+        
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    
+    # Only proceed during market hours
+    if not (market_open <= now <= market_close):
+        return
+        
     try:
-        morning_snapshot_path = "./backend/leaderboards/snapshots/morning-snapshot.json"
-        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
-            current_data = json.load(f)
-        with open(morning_snapshot_path, "w") as f:
-            json.dump(current_data, f)
+        # Load current data
+        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
+            current_data = json.load(file)
+            
+        # Load previous data from snapshot
+        snapshot_path = "./snapshots/leaderboard-snapshot.json"
+        previous_data = None
+        if os.path.exists(snapshot_path):
+            with open(snapshot_path, "r") as f:
+                previous_data = json.load(f)
+        
+        # Check if we should send an update
+        is_market_open = abs((now - market_open).total_seconds()) < 60
+        is_market_close = abs((now - market_close).total_seconds()) < 60
+        rankings_changed = have_rankings_changed(previous_data, current_data)
+        
+        if is_market_open or is_market_close or rankings_changed:
+            # Create DataFrame for displaying
+            df = pd.DataFrame.from_dict(current_data, orient="index")
+            df.reset_index(inplace=True)
+            df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
+            df.sort_values(by="Money In Account", ascending=False, inplace=True)
+            
+            # Format description
+            top_users = df.head(10)
+            description = ""
+            for idx, row in enumerate(top_users.iterrows(), 1):
+                _, row = row
+                money = float(row['Money In Account'])
+                description += f"**#{idx} - {row['Account Name']}**\n"
+                description += f"Money: ${money:,.2f}\n\n"
+            
+            # Send update
+            leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
+            if leaderboard_channel:
+                embed = discord.Embed(
+                    colour=get_embed_color(),
+                    title="📊 Leaderboard Update!",
+                    description=description,
+                    timestamp=get_pst_time(),
+                )
+                
+                # Add reason for update
+                if is_market_open:
+                    embed.set_footer(text="Market Open Update")
+                elif is_market_close:
+                    embed.set_footer(text="Market Close Update")
+                elif rankings_changed:
+                    embed.set_footer(text="Rankings Changed")
+                    
+                await leaderboard_channel.send(embed=embed)
+            
+            # Update snapshot after sending
+            with open(snapshot_path, "w") as f:
+                json.dump(current_data, f)
+                
     except Exception as e:
-        print(f"Error creating morning snapshot: {str(e)}")
+        print(f"Error in send_leaderboard: {str(e)}")
 
 
 @tasks.loop(time=datetime.time(hour=9, minute=30, tzinfo=timezone("US/Eastern")))
