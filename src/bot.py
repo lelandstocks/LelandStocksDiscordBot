@@ -9,6 +9,8 @@ from pytz import timezone
 from dotenv import load_dotenv
 import matplotlib.pyplot as plt
 import io
+# Add yfinance import
+import yfinance as yf
 
 # Load environment variables from .env file
 load_dotenv()
@@ -141,140 +143,119 @@ def generate_money_graph(username):
     files = [f for f in os.listdir(in_time_dir) if f.endswith('.json')]
     files.sort(key=lambda x: parse_leaderboard_timestamp(x))
     
-    # Create DataFrame to store all users' data
+    if not files:
+        return None, None, None
+
+    # Get start and end dates
+    start_date = parse_leaderboard_timestamp(files[0])
+    end_date = parse_leaderboard_timestamp(files[-1])
+    
+    # Fetch S&P 500 data starting from August 13th
+    try:
+        spy_start_date = datetime.datetime(2024, 8, 13)
+        spy = yf.download('^GSPC', start=spy_start_date, end=end_date, progress=False)
+        # Calculate what $100k would be worth based on S&P 500 performance
+        initial_spy_price = spy['Close'].iloc[0]
+        spy_returns = spy['Close'] / initial_spy_price
+        spy_values = 100000 * spy_returns
+        # Filter S&P 500 data to match the user's date range
+        spy = spy.loc[start_date:end_date]
+        spy_values = spy_values.loc[start_date:end_date]
+    except Exception as e:
+        print(f"Error fetching S&P 500 data: {e}")
+        spy_values = None
+    
+    # Create DataFrame to store data
     data = {
         'timestamp': [],
         username: [],  # Target user
     }
     
-    # Get initial data to find top competitors
-    with open(os.path.join(in_time_dir, files[-1]), 'r') as f:
-        latest_data = json.load(f)
-    
-    # Get top 3 users (excluding target user) for comparison
-    sorted_users = sorted(latest_data.items(), key=lambda x: float(x[1][0]), reverse=True)
-    competitors = [user[0] for user in sorted_users if user[0] != username][:3]
-    
-    # Add competitors to data dictionary
-    for competitor in competitors:
-        data[competitor] = []
-    
-    # Collect data for all users
+    # Collect data for user
     for file in files:
         try:
             with open(os.path.join(in_time_dir, file), 'r') as f:
                 file_data = json.load(f)
                 timestamp = parse_leaderboard_timestamp(file)
                 
-                # Check if data exists for all users
-                if username not in file_data or any(comp not in file_data for comp in competitors):
-                    continue  # Skip this timestamp
+                if username not in file_data:
+                    continue
                 
-                # Append timestamp and data
+                # Append data
                 data['timestamp'].append(timestamp)
                 data[username].append(float(file_data[username][0]))
-                for competitor in competitors:
-                    data[competitor].append(float(file_data[competitor][0]))
+                
         except Exception as e:
             print(f"Error reading file {file}: {e}")
             continue
     
     if not data['timestamp']:
-        return None, None, None  # Return None for buffer and both values
+        return None, None, None
     
-    # Convert data to numpy arrays and filter out zeros
-    timestamps = np.array(data['timestamp'])
-    user_values = np.array(data[username])
-    
-    # Create mask for non-zero values
-    valid_mask = user_values > 0
-    
-    # Create similar masks for competitors
-    competitor_masks = []
-    for competitor in competitors:
-        comp_values = np.array(data[competitor])
-        comp_mask = comp_values > 0
-        competitor_masks.append(comp_mask)
-    
-    # Combine all masks
-    combined_mask = valid_mask
-    for mask in competitor_masks:
-        combined_mask = combined_mask & mask  # Logical AND to ensure alignment
-    
-    # Apply the combined mask to all users and timestamps
-    data['timestamp'] = list(timestamps[combined_mask])
-    data[username] = list(user_values[combined_mask])
-    for i, competitor in enumerate(competitors):
-        comp_values = np.array(data[competitor])
-        data[competitor] = list(comp_values[combined_mask])
-    
-    # Find the lowest value and its timestamp
-    if data[username]:
-        lowest_value_index = np.argmin(data[username])
-        lowest_value = data[username][lowest_value_index]
-        lowest_timestamp = data['timestamp'][lowest_value_index]
-    else:
-        return None, None  # No data to plot
-    
-    # Find the highest value and its timestamp
-    highest_value_index = np.argmax(data[username])
-    highest_value = data[username][highest_value_index]
-    highest_timestamp = data['timestamp'][highest_value_index]
-    
-    # Plotting with basic style
-    plt.style.use('default')  # Use default style instead of seaborn
+    # Plotting
+    plt.style.use('default')
     plt.figure(figsize=(12, 6))
     
-    # Plot competitors with improved visibility
-    for competitor in competitors:
-        plt.plot(data['timestamp'], data[competitor], 
-                 marker='', color='gray', linewidth=1.5, alpha=0.5, label=competitor)
+    # Plot S&P 500 if data is available
+    if spy_values is not None:
+        plt.plot(spy.index, spy_values, 
+                color='gray', linewidth=1.5, alpha=0.5, 
+                label='S&P 500 ($100k invested)', linestyle='--')
     
-    # Plot target user with distinctive line
+    # Plot target user
     plt.plot(data['timestamp'], data[username],
-             marker='o', color='blue', linewidth=2.5, alpha=0.8,
-             markerfacecolor='blue', markersize=5, label=f"{username} (Main)")
+             color='blue', linewidth=2.5, alpha=0.8,
+             marker='o', markersize=5,
+             label=f"{username}")
+    
+    # Find extreme values for the user
+    lowest_value = min(data[username])
+    highest_value = max(data[username])
+    lowest_idx = data[username].index(lowest_value)
+    highest_idx = data[username].index(highest_value)
+    lowest_timestamp = data['timestamp'][lowest_idx]
+    highest_timestamp = data['timestamp'][highest_idx]
     
     # Customize the plot
-    plt.title(f"Money Over Time - {username} vs Top Competitors", 
+    plt.title(f"Account Value Over Time - {username}", 
               loc='left', fontsize=12, fontweight='bold')
     plt.xlabel("Time")
-    plt.ylabel("Money ($)")
+    plt.ylabel("Account Value ($)")
     plt.grid(True, alpha=0.2)
     plt.xticks(rotation=45)
     
     # Add annotations for final values
     last_timestamp = data['timestamp'][-1]
-    for user in [username] + competitors:
-        final_value = data[user][-1]
-        plt.text(last_timestamp, final_value, f' {user}\n ${final_value:,.2f}', 
-                 verticalalignment='center', fontsize=8)
+    final_value = data[username][-1]
+    plt.text(last_timestamp, final_value, 
+            f' Current\n ${final_value:,.2f}', 
+            verticalalignment='center', fontsize=8)
     
-    # Plot and annotate the lowest point
+    # Add annotation for S&P 500 if available
+    if spy_values is not None:
+        final_spy_value = float(spy_values.iloc[-1].item())  # Proper float conversion
+        plt.text(spy.index[-1], final_spy_value, 
+                f' S&P 500\n ${final_spy_value:,.2f}', 
+                verticalalignment='center', fontsize=8)
+    
+    # Plot and annotate extreme points
     plt.scatter([lowest_timestamp], [lowest_value], color='red', zorder=5, s=100)
-    plt.annotate(
-        f'Lowest: ${lowest_value:,.2f}',
-        xy=(lowest_timestamp, lowest_value),
-        xytext=(10, -20),
-        textcoords='offset points',
-        ha='left',
-        color='red',
-        fontweight='bold',
-        bbox=dict(facecolor='white', edgecolor='red', alpha=0.7, pad=2)
-    )
-    
-    # Plot and annotate the highest point
     plt.scatter([highest_timestamp], [highest_value], color='green', zorder=5, s=100)
-    plt.annotate(
-        f'Highest: ${highest_value:,.2f}',
-        xy=(highest_timestamp, highest_value),
-        xytext=(10, 20),
-        textcoords='offset points',
-        ha='left',
-        color='green',
-        fontweight='bold',
-        bbox=dict(facecolor='white', edgecolor='green', alpha=0.7, pad=2)
-    )
+    
+    for value, timestamp, color, label in [
+        (lowest_value, lowest_timestamp, 'red', 'Lowest'),
+        (highest_value, highest_timestamp, 'green', 'Highest')
+    ]:
+        plt.annotate(
+            f'{label}: ${value:,.2f}',
+            xy=(timestamp, value),
+            xytext=(10, -20 if label == 'Lowest' else 20),
+            textcoords='offset points',
+            ha='left',
+            color=color,
+            fontweight='bold',
+            bbox=dict(facecolor='white', edgecolor=color, alpha=0.7, pad=2)
+        )
     
     plt.legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     plt.tight_layout()
@@ -285,7 +266,7 @@ def generate_money_graph(username):
     buf.seek(0)
     plt.close()
     
-    return buf, lowest_value, highest_value  # Return buffer and both extreme values
+    return buf, lowest_value, highest_value
 
 def get_embed_color():
     """Get the appropriate embed color based on testing mode"""
