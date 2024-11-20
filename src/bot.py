@@ -15,6 +15,15 @@ import yfinance as yf
 # Load environment variables from .env file
 load_dotenv()
 
+# Set up paths
+PATH_TO_LEADERBOARD_DATA = os.environ.get('PATH_TO_LEADERBOARD_DATA', '/home/strifedeeno/LelandStocksDiscordBot/lelandstocks.github.io')
+LEADERBOARDS_DIR = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/leaderboards')
+IN_TIME_DIR = os.path.join(LEADERBOARDS_DIR, 'in_time')
+LEADERBOARD_LATEST = os.path.join(LEADERBOARDS_DIR, 'leaderboard-latest.json')
+USERNAMES_PATH = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/portfolios/usernames.txt')
+SNAPSHOT_PATH = "./snapshots/leaderboard-snapshot.json"
+MORNING_SNAPSHOT_PATH = os.path.join(LEADERBOARDS_DIR, 'snapshots/morning-snapshot.json')
+
 # Set up Discord bot intents
 intents = discord.Intents.default()
 intents.message_content = True
@@ -46,13 +55,12 @@ def get_latest_in_time_leaderboard():
     """
     Get the most recent leaderboard file from the in_time directory.
     """
-    in_time_dir = "./lelandstocks.github.io/backend/leaderboards/in_time"
-    files = [f for f in os.listdir(in_time_dir) if f.endswith(".json")]
+    files = [f for f in os.listdir(IN_TIME_DIR) if f.endswith(".json")]
     if not files:
         return None
     files.sort(key=lambda x: parse_leaderboard_timestamp(x))
     latest_file = files[-1]
-    return os.path.join(in_time_dir, latest_file)
+    return os.path.join(IN_TIME_DIR, latest_file)
 
 
 def get_pst_time():
@@ -69,7 +77,7 @@ async def compare_stock_changes(channel):
         snapshot_path = "./snapshots/leaderboard-snapshot.json"
         if not os.path.exists(snapshot_path):
             # If snapshot doesn't exist, create it and return
-            with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
+            with open(LEADERBOARD_LATEST, "r") as f:
                 current_data = json.load(f)
             with open(snapshot_path, "w") as f:
                 json.dump(current_data, f)
@@ -78,7 +86,7 @@ async def compare_stock_changes(channel):
         # Load both snapshot and current data
         with open(snapshot_path, "r") as f:
             previous_data = json.load(f)
-        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
+        with open(LEADERBOARD_LATEST, "r") as f:
             current_data = json.load(f)
         # Compare holdings for each user
         for username in current_data:
@@ -120,7 +128,7 @@ async def compare_stock_changes(channel):
 
 
 # Load usernames from file
-with open("./lelandstocks.github.io/backend/portfolios/usernames.txt", "r") as f:
+with open(USERNAMES_PATH, "r") as f:
     usernames_list = [line.strip() for line in f.readlines()]
 
 
@@ -139,8 +147,7 @@ def generate_money_graph(username):
     import numpy as np
     
     # Get all files from in_time directory and sort them by datetime
-    in_time_dir = "./lelandstocks.github.io/backend/leaderboards/in_time"
-    files = [f for f in os.listdir(in_time_dir) if f.endswith('.json')]
+    files = [f for f in os.listdir(IN_TIME_DIR) if f.endswith('.json')]
     files.sort(key=lambda x: parse_leaderboard_timestamp(x))
     
     if not files:
@@ -177,7 +184,7 @@ def generate_money_graph(username):
     # Collect data for user
     for file in files:
         try:
-            with open(os.path.join(in_time_dir, file), 'r') as f:
+            with open(os.path.join(IN_TIME_DIR, file), 'r') as f:
                 file_data = json.load(f)
                 timestamp = parse_leaderboard_timestamp(file)
                 
@@ -299,7 +306,7 @@ class UserInfo(commands.Cog):
             return
 
         try:
-            with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
+            with open(LEADERBOARD_LATEST, "r") as file:
                 data = json.load(file)
             df = pd.DataFrame.from_dict(data, orient="index")
             df.reset_index(inplace=True)
@@ -394,7 +401,7 @@ async def leaderboard(interaction: discord.Interaction, count: int = 1):
     """
     await interaction.response.defer()
     try:
-        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
+        with open(LEADERBOARD_LATEST, "r") as file:
             data = json.load(file)
         df = pd.DataFrame.from_dict(data, orient="index")
         df.reset_index(inplace=True)
@@ -466,7 +473,7 @@ async def send_leaderboard():
         
     try:
         # Load current data
-        with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as file:
+        with open(LEADERBOARD_LATEST, "r") as file:
             current_data = json.load(file)
             
         # Load previous data from snapshot
@@ -551,7 +558,7 @@ async def send_daily_summary():
                 morning_data = json.load(f)
 
             # Load end of day data
-            with open("./lelandstocks.github.io/backend/leaderboards/leaderboard-latest.json", "r") as f:
+            with open(LEADERBOARD_LATEST, "r") as f:
                 current_data = json.load(f)
 
             # Calculate performance using morning data
