@@ -16,13 +16,19 @@ import yfinance as yf
 load_dotenv()
 
 # Set up paths
-PATH_TO_LEADERBOARD_DATA = os.environ.get('PATH_TO_LEADERBOARD_DATA', '/home/strifedeeno/LelandStocksDiscordBot/lelandstocks.github.io')
+PATH_TO_LEADERBOARD_DATA = os.environ.get('PATH_TO_LEADERBOARD_DATA')
 LEADERBOARDS_DIR = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/leaderboards')
 IN_TIME_DIR = os.path.join(LEADERBOARDS_DIR, 'in_time')
 LEADERBOARD_LATEST = os.path.join(LEADERBOARDS_DIR, 'leaderboard-latest.json')
 USERNAMES_PATH = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/portfolios/usernames.txt')
-SNAPSHOT_PATH = "./snapshots/leaderboard-snapshot.json"
-MORNING_SNAPSHOT_PATH = os.path.join(LEADERBOARDS_DIR, 'snapshots/morning-snapshot.json')
+
+# Update snapshot paths to be local
+SNAPSHOTS_DIR = "./snapshots"
+SNAPSHOT_PATH = os.path.join(SNAPSHOTS_DIR, "leaderboard-snapshot.json")
+MORNING_SNAPSHOT_PATH = os.path.join(SNAPSHOTS_DIR, "morning-snapshot.json")
+
+# Ensure snapshots directory exists
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 
 # Set up Discord bot intents
 intents = discord.Intents.default()
@@ -547,9 +553,7 @@ async def send_daily_summary():
     if now.weekday() < 5:  # Only on weekdays
         try:
             # Load morning snapshot instead of previous day's snapshot
-            morning_snapshot_path = (
-                "./backend/leaderboards/snapshots/morning-snapshot.json"
-            )
+            morning_snapshot_path = MORNING_SNAPSHOT_PATH
             if not os.path.exists(morning_snapshot_path):
                 print("No morning snapshot found")
                 return
