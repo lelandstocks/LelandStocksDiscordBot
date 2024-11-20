@@ -1,6 +1,7 @@
 #!/bin/bash
 
-LAST_HASH=""
+LAST_MAIN_HASH=""
+LAST_SUB_HASH=""
 BOT_PID=""
 
 update_repositories() {
@@ -9,12 +10,20 @@ update_repositories() {
 }
 
 while true; do
-    # Get current hash of main repo and submodule
-    CURRENT_HASH=$(git rev-parse HEAD; cd lelandstocks.github.io && git rev-parse HEAD && cd ../)
+    # Get current hash of main repo
+    CURRENT_MAIN_HASH=$(git rev-parse HEAD)
     
-    # Check if hash changed
-    if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
-        echo "Changes detected, updating..."
+    # Get current hash of submodule
+    cd lelandstocks.github.io
+    CURRENT_SUB_HASH=$(git rev-parse HEAD)
+    cd ../
+    
+    # Check if either hash changed
+    if [ "$CURRENT_MAIN_HASH" != "$LAST_MAIN_HASH" ] || [ "$CURRENT_SUB_HASH" != "$LAST_SUB_HASH" ]; then
+        echo "Changes detected..."
+        echo "Main repo changed: $([ "$CURRENT_MAIN_HASH" != "$LAST_MAIN_HASH" ] && echo "yes" || echo "no")"
+        echo "Submodule changed: $([ "$CURRENT_SUB_HASH" != "$LAST_SUB_HASH" ] && echo "yes" || echo "no")"
+        
         update_repositories
         
         # Kill existing bot process if running
@@ -26,7 +35,8 @@ while true; do
         pixi run update_discord &
         BOT_PID=$!
         
-        LAST_HASH=$CURRENT_HASH
+        LAST_MAIN_HASH=$CURRENT_MAIN_HASH
+        LAST_SUB_HASH=$CURRENT_SUB_HASH
     fi
     
     sleep 2
