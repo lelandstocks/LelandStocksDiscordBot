@@ -57,16 +57,16 @@ while true; do
         cd lelandstocks.github.io && git pull origin master && cd ../
     else
         echo "No changes detected."
-        
-        # Stop the existing bot if running
-        stop_bot
     fi
     
-    echo "Starting bot..."
-    # Start bot in the background and save its PID
-    pixi run update_discord &
-    BOT_PID=$!
-    echo "Bot started with PID: $BOT_PID"
+    # Start the bot only if there were changes detected
+    if check_changes; then
+        echo "Starting bot..."
+        # Start bot in the background and save its PID
+        pixi run update_discord &
+        BOT_PID=$!
+        echo "Bot started with PID: $BOT_PID"
+    fi
     
     sleep 10
 done
