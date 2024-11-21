@@ -11,6 +11,8 @@ Leland Stocks Discord Bot is a powerful and user-friendly Discord bot designed t
 - **🔔 Stock Changes**: Get notified about changes in your stock holdings.
 - **📅 Daily Summary**: Receive a daily update featuring top performers and the most active traders.
 - **⏰ Scheduled Updates**: Enjoy automatic updates during trading hours.
+- **📈 Performance Graphs**: Visualize user performance with dynamic money graphs.
+- **🛠 Automated Updates**: The bot fetches the latest leaderboard and stock data automatically.
 
 ---
 
@@ -23,19 +25,40 @@ Leland Stocks Discord Bot is a powerful and user-friendly Discord bot designed t
 - 📚 **Investopedia account**
 - 🗂️ **Environment variables** stored in a `.env` file
 
----
+### 🔧 Setup
 
-## 🔧 Configuration
+1. **Clone the repository with submodules**:
+    ```bash
+    git clone --recursive https://github.com/lelandstocks/LelandStocksDiscordBot.git
+    ```
 
-### 📁 Environment Variables
-- **`DISCORD_BOT_TOKEN`**: Your bot's token to connect to Discord.
-- **`DISCORD_CHANNEL_ID_Leaderboard`**: The channel ID for leaderboard updates.
-- **`DISCORD_CHANNEL_ID_Stocks`**: The channel ID for stock change notifications.
+2. **Install dependencies**:
+    Ensure you are in the project directory, and then install the required Python packages:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-### ⏰ Trading Hours
-- **Market Open**: 🕤 9:30 AM EST  
-- **Market Close**: 🕓 4:00 PM EST  
-- **Updates**: Every minute during trading hours. ⏱️
+3. **Configure environment variables**:
+    Create a `.env` file in the project root and add the following variables:
+    ```bash
+    DISCORD_BOT_TOKEN=your_discord_bot_token
+    DISCORD_CHANNEL_ID_Leaderboard=your_leaderboard_channel_id
+    DISCORD_CHANNEL_ID_Stocks=your_stocks_channel_id
+    PATH_TO_LEADERBOARD_DATA=your_leaderboard_data_path
+    TESTING=false  # Set to true for testing mode
+    ```
+
+4. **Run the bot**:
+    Start the bot with the following command:
+    ```bash
+    python bot.py
+    ```
+
+5. **Automate with a script**:
+    You can use the provided `run.sh` script to automatically fetch updates and restart the bot as needed:
+    ```bash
+    bash run.sh
+    ```
 
 ---
 
