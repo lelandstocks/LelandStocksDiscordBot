@@ -35,8 +35,17 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 
+# Ensure the bot token is loaded correctly
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+if not DISCORD_BOT_TOKEN:
+    print("Error: DISCORD_BOT_TOKEN is not set in the environment variables.")
+    exit(1)
+
 # Initialize bot instance with command prefix
 bot = commands.Bot(command_prefix="$", intents=intents)
+
+# Add debug print to check bot initialization
+print("Bot initialized with command prefix '$'")
 
 # Add timezone constants near the top of the file with other constants
 EST = timezone('US/Eastern')
@@ -397,10 +406,9 @@ async def setup_hook():
     Run setup when the bot is ready.
     """
     await setup(bot)
-
+    print("Setup hook executed")
 
 bot.setup_hook = setup_hook
-
 
 @bot.tree.command(name="leaderboard", description="Get current leaderboard")
 @app_commands.describe(count="Number of top users to display (default: 1)")
@@ -661,8 +669,12 @@ async def on_ready():
         send_leaderboard.start()
         start_of_day.start()
         send_daily_summary.start()
+        print("Scheduled tasks started")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
 
-
 # Run the bot with the provided token from environment variables
+try:
+    bot.run(DISCORD_BOT_TOKEN)
+except Exception as e:
+    print(f"Error running the bot: {e}")
