@@ -91,48 +91,43 @@ async def compare_stock_changes(channel):
     Compare current leaderboard with snapshot to detect stock changes, and send updates to the Discord channel as embeds.
     """
     try:
-        # Load the snapshot file
-        snapshot_path = "./snapshots/leaderboard-snapshot.json"
-        if not os.path.exists(snapshot_path):
-            # If snapshot doesn't exist, create it and return
-            with open(LEADERBOARD_LATEST, "r") as f:
-                current_data = json.load(f)
-            with open(snapshot_path, "w") as f:
-                json.dump(current_data, f)
-            return
-
-        # Load both snapshot and current data
-        with open(snapshot_path, "r") as f:
-            previous_data = json.load(f)
+        # Load the current leaderboard data first
         with open(LEADERBOARD_LATEST, "r") as f:
             current_data = json.load(f)
-        # Compare holdings for each user
-        for username in current_data:
-            if username not in previous_data:
-                continue
 
-            # Get current and previous stock symbols
-            current_stocks = set(stock[0] for stock in current_data[username][2])
-            previous_stocks = set(stock[0] for stock in previous_data[username][2])
+        # Load the snapshot file if it exists
+        snapshot_path = SNAPSHOT_PATH
+        if os.path.exists(snapshot_path):
+            with open(snapshot_path, "r") as f:
+                previous_data = json.load(f)
 
-            # Find new and removed stocks
-            new_stocks = current_stocks - previous_stocks
-            removed_stocks = previous_stocks - current_stocks
+            # Compare holdings for each user
+            for username in current_data:
+                if username not in previous_data:
+                    continue
 
-            if new_stocks or removed_stocks:
-                description = ""
-                for stock in new_stocks:
-                    description += f"+ Bought {stock}\n"
-                for stock in removed_stocks:
-                    description += f"- Sold {stock}\n"
+                # Get current and previous stock symbols
+                current_stocks = set(stock[0] for stock in current_data[username][2])
+                previous_stocks = set(stock[0] for stock in previous_data[username][2])
 
-                embed = discord.Embed(
-                    colour=discord.Colour.green(),
-                    title=f"Stock Changes for {username}",
-                    description=description,
-                    timestamp=get_pst_time(),
-                )
-                await channel.send(embed=embed)
+                # Find new and removed stocks
+                new_stocks = current_stocks - previous_stocks
+                removed_stocks = previous_stocks - current_stocks
+
+                if new_stocks or removed_stocks:
+                    description = ""
+                    for stock in new_stocks:
+                        description += f"+ Bought {stock}\n"
+                    for stock in removed_stocks:
+                        description += f"- Sold {stock}\n"
+
+                    embed = discord.Embed(
+                        colour=discord.Colour.green(),
+                        title=f"Stock Changes for {username}",
+                        description=description,
+                        timestamp=get_pst_time(),
+                    )
+                    await channel.send(embed=embed)
 
         # Update the snapshot with current data after comparison
         with open(snapshot_path, "w") as f:
@@ -141,7 +136,6 @@ async def compare_stock_changes(channel):
     except Exception as e:
         await channel.send(f"Error comparing stock changes: {str(e)}")
         import traceback
-
         traceback.print_exc()
 
 
@@ -663,8 +657,15 @@ async def on_ready():
     """
     print(f"Logged in as {bot.user}")
     try:
+        # Get the leaderboard channel
+        leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
+        if leaderboard_channel:
+            # Do initial comparison with existing snapshot before starting regular tasks
+            await compare_stock_changes(leaderboard_channel)
+
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
+        
         # Start all scheduled tasks
         send_leaderboard.start()
         start_of_day.start()
@@ -678,3 +679,86 @@ try:
     bot.run(DISCORD_BOT_TOKEN)
 except Exception as e:
     print(f"Error running the bot: {e}")
+
+async def create_morning_snapshot():
+    """Create a snapshot of the leaderboard at market open"""
+    try:
+        # Load current leaderboard data
+        with open(LEADERBOARD_LATEST, "r") as f:
+            data = json.load(f)
+        
+        # Save as morning snapshot
+        with open(MORNING_SNAPSHOT_PATH, "w") as f:
+            json.dump(data, f)
+            
+        print("Created morning snapshot")
+    except Exception as e:
+        print(f"Error creating morning snapshot: {e}")
+
+def calculate_daily_performance(morning_data, current_data):
+    """
+    Calculate performance metrics comparing morning to current data.
+    Returns dict with various performance statistics.
+    """
+    stats = {
+        "performance": [],
+        "most_active": [],
+        "biggest_gain": {"username": None, "amount": 0, "percent": 0},
+        "biggest_loss": {"username": None, "amount": 0, "percent": 0},
+        "total_trades": 0
+    }
+    
+    # Calculate metrics for each user
+    for username in current_data:
+        if username not in morning_data:
+            continue
+            
+        # Get morning and current values
+        morning_value = float(morning_data[username][0])
+        current_value = float(current_data[username][0])
+        
+        # Calculate changes
+        change_amount = current_value - morning_value
+        change_percent = (change_amount / morning_value) * 100 if morning_value != 0 else 0
+        
+        # Count trades by comparing stock holdings
+        morning_stocks = set(stock[0] for stock in morning_data[username][2])
+        current_stocks = set(stock[0] for stock in current_data[username][2])
+        trades = len(morning_stocks.symmetric_difference(current_stocks))
+        stats["total_trades"] += trades
+        
+        # Add to performance list
+        stats["performance"].append({
+            "username": username,
+            "change_amount": change_amount,
+            "change_percent": change_percent,
+            "trades": trades
+        })
+        
+        # Update biggest gain/loss
+        if change_percent > stats["biggest_gain"]["percent"]:
+            stats["biggest_gain"] = {
+                "username": username,
+                "amount": change_amount,
+                "percent": change_percent
+            }
+        if change_percent < stats["biggest_loss"]["percent"]:
+            stats["biggest_loss"] = {
+                "username": username,
+                "amount": change_amount,
+                "percent": change_percent
+            }
+            
+        # Track active traders
+        if trades > 0:
+            stats["most_active"].append({
+                "username": username,
+                "trades": trades
+            })
+    
+    # Sort results
+    stats["performance"].sort(key=lambda x: x["change_percent"], reverse=True)
+    stats["most_active"].sort(key=lambda x: x["trades"], reverse=True)
+    stats["most_active"] = stats["most_active"][:3]  # Keep top 3 most active
+    
+    return stats
