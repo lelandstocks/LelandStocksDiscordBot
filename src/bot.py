@@ -38,6 +38,9 @@ intents.guilds = True
 # Initialize bot instance with command prefix
 bot = commands.Bot(command_prefix="$", intents=intents)
 
+# Add timezone constants near the top of the file with other constants
+EST = timezone('US/Eastern')
+PST = timezone('America/Los_Angeles')
 
 def get_user_info(df, username):
     """
@@ -71,7 +74,7 @@ def get_latest_in_time_leaderboard():
 
 def get_pst_time():
     """Helper function to get current time in PST"""
-    return datetime.datetime.now(timezone("America/Los_Angeles"))
+    return datetime.datetime.now(PST)
 
 
 async def compare_stock_changes(channel):
@@ -466,7 +469,7 @@ async def send_leaderboard():
     """
     Send leaderboard updates only at market open/close or when rankings change.
     """
-    now = datetime.datetime.now(timezone("US/Eastern"))
+    now = datetime.datetime.now(EST)
     if now.weekday() >= 5:  # Skip weekends
         return
         
@@ -538,18 +541,18 @@ async def send_leaderboard():
         print(f"Error in send_leaderboard: {str(e)}")
 
 
-@tasks.loop(time=datetime.time(hour=9, minute=30, tzinfo=timezone("US/Eastern")))
+@tasks.loop(time=datetime.time(hour=9, minute=30, tzinfo=EST))
 async def start_of_day():
     """Create snapshot at market open"""
-    now = datetime.datetime.now(timezone("US/Eastern"))
+    now = datetime.datetime.now(EST)
     if now.weekday() < 5:  # Only on weekdays
         await create_morning_snapshot()
 
 
-@tasks.loop(time=datetime.time(hour=16, minute=0, tzinfo=timezone("US/Eastern")))
+@tasks.loop(time=datetime.time(hour=16, minute=0, tzinfo=EST))
 async def send_daily_summary():
     """Send daily summary comparing start of day to end of day"""
-    now = datetime.datetime.now(timezone("US/Eastern"))
+    now = datetime.datetime.now(EST)
     if now.weekday() < 5:  # Only on weekdays
         try:
             # Load morning snapshot instead of previous day's snapshot
@@ -663,5 +666,3 @@ async def on_ready():
 
 
 # Run the bot with the provided token from environment variables
-DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-bot.run(DISCORD_BOT_TOKEN)
