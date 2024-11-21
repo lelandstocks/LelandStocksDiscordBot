@@ -43,30 +43,54 @@ check_changes() {
 
 # Main loop for checking updates and restarting the bot
 while true; do
-    update_repositories
-    
-    if check_changes; then
-        echo "Remote changes detected, updating repositories..."
+    # On the first run, check for updates and start the bot
+    if [ -z "$BOT_PID" ]; then
+        update_repositories
         
-        # Stop the existing bot if running
-        stop_bot
-        
-        # Pull changes for main repo (using origin/main)
-        git pull origin main || echo "Warning: Failed to pull main repository"
-        # Pull changes for submodule (using origin/master)
-        cd lelandstocks.github.io && git pull origin master && cd ../
-    else
-        echo "No changes detected."
-    fi
-    
-    # Start the bot only if there were changes detected
-    if check_changes; then
+        if check_changes; then
+            echo "Remote changes detected, updating repositories..."
+            
+            # Stop the existing bot if running
+            stop_bot
+            
+            # Pull changes for main repo (using origin/main)
+            git pull origin main || echo "Warning: Failed to pull main repository"
+            # Pull changes for submodule (using origin/master)
+            cd lelandstocks.github.io && git pull origin master && cd ../
+        else
+            echo "No changes detected."
+        fi
+
+        # Start the bot after initial check
         echo "Starting bot..."
-        # Start bot in the background and save its PID
         pixi run update_discord &
         BOT_PID=$!
         echo "Bot started with PID: $BOT_PID"
+    else
+        # While the bot is running, keep checking for updates
+        update_repositories
+        
+        if check_changes; then
+            echo "Remote changes detected, updating repositories..."
+            
+            # Stop the existing bot if running
+            stop_bot
+            
+            # Pull changes for main repo (using origin/main)
+            git pull origin main || echo "Warning: Failed to pull main repository"
+            # Pull changes for submodule (using origin/master)
+            cd lelandstocks.github.io && git pull origin master && cd ../
+            
+            # Restart the bot after updating repositories
+            echo "Starting bot..."
+            pixi run update_discord &
+            BOT_PID=$!
+            echo "Bot started with PID: $BOT_PID"
+        else
+            echo "No changes detected. Bot is still running."
+        fi
     fi
-    
+
+    # Sleep before checking for updates again
     sleep 10
 done
