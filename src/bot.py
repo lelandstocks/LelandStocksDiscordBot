@@ -34,7 +34,7 @@ async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
     try:
         if not os.path.exists(LEADERBOARD_LATEST):
             return None
-            
+
         try:
             async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
                 content = await f.read()
@@ -218,7 +218,7 @@ def generate_money_graph(username):
     # Use a more efficient file reading method
     files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
                   key=lambda x: parse_leaderboard_timestamp(x.name))
-    
+
     if not files:
         return None, None, None
 
@@ -245,23 +245,23 @@ def generate_money_graph(username):
 
     if not data['timestamp']:
         return None, None, None
-    
+
     # Plotting
     plt.style.use('default')
     plt.figure(figsize=(12, 6))
-    
+
     # Plot S&P 500 if data is available
     if spy_values is not None:
-        plt.plot(spy.index, spy_values, 
-                color='gray', linewidth=1.5, alpha=0.5, 
+        plt.plot(spy.index, spy_values,
+                color='gray', linewidth=1.5, alpha=0.5,
                 label='S&P 500 ($100k invested)', linestyle='--')
-    
+
     # Plot target user
     plt.plot(data['timestamp'], data[username],
              color='blue', linewidth=2.5, alpha=0.8,
              marker='o', markersize=5,
              label=f"{username}")
-    
+
     # Find extreme values for the user
     lowest_value = min(data[username])
     highest_value = max(data[username])
@@ -269,33 +269,33 @@ def generate_money_graph(username):
     highest_idx = data[username].index(highest_value)
     lowest_timestamp = data['timestamp'][lowest_idx]
     highest_timestamp = data['timestamp'][highest_idx]
-    
+
     # Customize the plot
-    plt.title(f"Account Value Over Time - {username}", 
+    plt.title(f"Account Value Over Time - {username}",
               loc='left', fontsize=12, fontweight='bold')
     plt.xlabel("Time")
     plt.ylabel("Account Value ($)")
     plt.grid(True, alpha=0.2)
     plt.xticks(rotation=45)
-    
+
     # Add annotations for final values
     last_timestamp = data['timestamp'][-1]
     final_value = data[username][-1]
-    plt.text(last_timestamp, final_value, 
-            f' Current\n ${final_value:,.2f}', 
+    plt.text(last_timestamp, final_value,
+            f' Current\n ${final_value:,.2f}',
             verticalalignment='center', fontsize=8)
-    
+
     # Add annotation for S&P 500 if available
     if spy_values is not None:
         final_spy_value = float(spy_values.iloc[-1].item())  # Proper float conversion
-        plt.text(spy.index[-1], final_spy_value, 
-                f' S&P 500\n ${final_spy_value:,.2f}', 
+        plt.text(spy.index[-1], final_spy_value,
+                f' S&P 500\n ${final_spy_value:,.2f}',
                 verticalalignment='center', fontsize=8)
-    
+
     # Plot and annotate extreme points
     plt.scatter([lowest_timestamp], [lowest_value], color='red', zorder=5, s=100)
     plt.scatter([highest_timestamp], [highest_value], color='green', zorder=5, s=100)
-    
+
     for value, timestamp, color, label in [
         (lowest_value, lowest_timestamp, 'red', 'Lowest'),
         (highest_value, highest_timestamp, 'green', 'Highest')
@@ -310,16 +310,16 @@ def generate_money_graph(username):
             fontweight='bold',
             bbox=dict(facecolor='white', edgecolor=color, alpha=0.7, pad=2)
         )
-    
+
     plt.legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     plt.tight_layout()
-    
+
     # Save plot to bytes buffer
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='white')
     buf.seek(0)
     plt.close()
-    
+
     return buf, lowest_value, highest_value
 
 def get_embed_color():
@@ -376,7 +376,7 @@ class UserInfo(commands.Cog):
                 ),
                 timestamp=get_pst_time(),
             )
-            
+
             # Generate and add the graph
             try:
                 graph_buffer, lowest_value, highest_value = generate_money_graph(username)
@@ -401,7 +401,7 @@ class UserInfo(commands.Cog):
                 print(f"Error generating graph: {graph_error}")
                 # If graph fails, still send the basic embed
                 await interaction.followup.send(embed=embed)
-                
+
         except Exception as e:
             print(f"Error in userinfo command: {e}")
             await interaction.followup.send(f"Error fetching user info: {str(e)}")
@@ -437,45 +437,45 @@ async def setup_hook():
 bot.setup_hook = setup_hook
 
 @bot.tree.command(name="leaderboard", description="Get current leaderboard")
-@app_commands.describe(count="Number of top users to display (default: 1)")
-async def leaderboard(interaction: discord.Interaction, count: int = 1):
+@app_commands.describe(count="Number of top users to display (default: 10)")
+async def leaderboard(interaction: discord.Interaction):
     """
-    Respond to the /leaderboard command with the top N users' info.
+    Respond to the /leaderboard command with the top 10 users' info.
     """
     await interaction.response.defer()
     try:
-        with open(LEADERBOARD_LATEST, "r") as file:
-            data = json.load(file)
-        df = pd.DataFrame.from_dict(data, orient="index")
+        # Load current data
+        current_data = await load_leaderboard_data()
+        if not current_data:
+            await interaction.followup.send("Error loading leaderboard data")
+            return
+
+        # Create DataFrame for displaying
+        df = pd.DataFrame.from_dict(current_data, orient="index")
         df.reset_index(inplace=True)
-        df.columns = [
-            "Account Name",
-            "Money In Account",
-            "Investopedia Link",
-            "Stocks Invested In",
-        ]
+        df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
         df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
-        # Limit count to be between 1 and 10
-        count = max(1, min(count, 10))
-
+        # Format description
+        top_users = df.head(10)
         description = ""
-        for i in range(min(count, len(df))):
-            user_name, user_money, user_stocks = get_user_info(
-                df, df.iloc[i]["Account Name"]
-            )
-            description += f"**#{i+1} - {user_name}**\n"
-            description += f"Money: {user_money}\n"
-            description += f"Holdings:\n{user_stocks}\n\n"
+        for idx, row in enumerate(top_users.iterrows(), 1):
+            _, row = row
+            money = float(row['Money In Account'])
+            description += f"**#{idx} - {row['Account Name']}**\n"
+            description += f"Money: ${money:,.2f}\n\n"
 
         embed = discord.Embed(
-            colour=get_embed_color(),  # Changed this line
-            title="Current Leaderboard",
+            colour=get_embed_color(),
+            title="📊 Current Leaderboard",
             description=description,
             timestamp=get_pst_time(),
         )
+
         await interaction.followup.send(embed=embed)
+
     except Exception as e:
+        print(f"Error in leaderboard command: {str(e)}")
         await interaction.followup.send(f"Error fetching leaderboard: {str(e)}")
 
 
@@ -486,15 +486,15 @@ def have_rankings_changed(previous_data, current_data):
     """
     if not previous_data or not current_data:
         return True
-    
+
     # Convert both datasets into sorted lists of (username, money) tuples
     prev_rankings = [(name, float(data[0])) for name, data in previous_data.items()]
     curr_rankings = [(name, float(data[0])) for name, data in current_data.items()]
-    
+
     # Sort by money in descending order
     prev_rankings.sort(key=lambda x: x[1], reverse=True)
     curr_rankings.sort(key=lambda x: x[1], reverse=True)
-    
+
     # Compare top 10 rankings
     return prev_rankings[:10] != curr_rankings[:10]
 
@@ -507,14 +507,14 @@ async def send_leaderboard():
     now = datetime.datetime.now(EST)
     if now.weekday() >= 5:  # Skip weekends
         return
-        
+
     market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    
+
     # Only proceed during market hours
     if not (market_open <= now <= market_close):
         return
-        
+
     try:
         # Load current data using the async function
         current_data = await load_leaderboard_data()
@@ -527,19 +527,19 @@ async def send_leaderboard():
         if os.path.exists(snapshot_path):
             with open(snapshot_path, "r") as f:
                 previous_data = json.load(f)
-        
+
         # Check if we should send an update
         is_market_open = abs((now - market_open).total_seconds()) < 60
         is_market_close = abs((now - market_close).total_seconds()) < 60
         rankings_changed = have_rankings_changed(previous_data, current_data)
-        
+
         if is_market_open or is_market_close or rankings_changed:
             # Create DataFrame for displaying
             df = pd.DataFrame.from_dict(current_data, orient="index")
             df.reset_index(inplace=True)
             df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
             df.sort_values(by="Money In Account", ascending=False, inplace=True)
-            
+
             # Format description
             top_users = df.head(10)
             description = ""
@@ -548,7 +548,7 @@ async def send_leaderboard():
                 money = float(row['Money In Account'])
                 description += f"**#{idx} - {row['Account Name']}**\n"
                 description += f"Money: ${money:,.2f}\n\n"
-            
+
             # Send update
             leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
             if leaderboard_channel:
@@ -558,7 +558,7 @@ async def send_leaderboard():
                     description=description,
                     timestamp=get_pst_time(),
                 )
-                
+
                 # Add reason for update
                 if is_market_open:
                     embed.set_footer(text="Market Open Update")
@@ -566,13 +566,13 @@ async def send_leaderboard():
                     embed.set_footer(text="Market Close Update")
                 elif rankings_changed:
                     embed.set_footer(text="Rankings Changed")
-                    
+
                 await leaderboard_channel.send(embed=embed)
-            
+
             # Update snapshot after sending
             with open(snapshot_path, "w") as f:
                 json.dump(current_data, f)
-                
+
     except Exception as e:
         print(f"Error in send_leaderboard: {str(e)}")
 
@@ -699,7 +699,7 @@ async def on_ready():
 
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
-        
+
         # Start all scheduled tasks
         send_leaderboard.start()
         start_of_day.start()
@@ -720,11 +720,11 @@ async def create_morning_snapshot():
         # Load current leaderboard data
         with open(LEADERBOARD_LATEST, "r") as f:
             data = json.load(f)
-        
+
         # Save as morning snapshot
         with open(MORNING_SNAPSHOT_PATH, "w") as f:
             json.dump(data, f)
-            
+
         print("Created morning snapshot")
     except Exception as e:
         print(f"Error creating morning snapshot: {e}")
@@ -741,26 +741,26 @@ def calculate_daily_performance(morning_data, current_data):
         "biggest_loss": {"username": None, "amount": 0, "percent": 0},
         "total_trades": 0
     }
-    
+
     # Calculate metrics for each user
     for username in current_data:
         if username not in morning_data:
             continue
-            
+
         # Get morning and current values
         morning_value = float(morning_data[username][0])
         current_value = float(current_data[username][0])
-        
+
         # Calculate changes
         change_amount = current_value - morning_value
         change_percent = (change_amount / morning_value) * 100 if morning_value != 0 else 0
-        
+
         # Count trades by comparing stock holdings
         morning_stocks = set(stock[0] for stock in morning_data[username][2])
         current_stocks = set(stock[0] for stock in current_data[username][2])
         trades = len(morning_stocks.symmetric_difference(current_stocks))
         stats["total_trades"] += trades
-        
+
         # Add to performance list
         stats["performance"].append({
             "username": username,
@@ -768,7 +768,7 @@ def calculate_daily_performance(morning_data, current_data):
             "change_percent": change_percent,
             "trades": trades
         })
-        
+
         # Update biggest gain/loss
         if change_percent > stats["biggest_gain"]["percent"]:
             stats["biggest_gain"] = {
@@ -782,19 +782,19 @@ def calculate_daily_performance(morning_data, current_data):
                 "amount": change_amount,
                 "percent": change_percent
             }
-            
+
         # Track active traders
         if trades > 0:
             stats["most_active"].append({
                 "username": username,
                 "trades": trades
             })
-    
+
     # Sort results
     stats["performance"].sort(key=lambda x: x["change_percent"], reverse=True)
     stats["most_active"].sort(key=lambda x: x["trades"], reverse=True)
     stats["most_active"] = stats["most_active"][:3]  # Keep top 3 most active
-    
+
     return stats
 
 # Async file operations
@@ -806,7 +806,7 @@ async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
         # Handle case where file doesn't exist
         if not os.path.exists(LEADERBOARD_LATEST):
             return None
-            
+
         # Use regular open if aiofiles fails
         try:
             async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
