@@ -3,6 +3,7 @@
 LAST_MAIN_HASH=""
 LAST_SUB_HASH=""
 BOT_PID=""
+MAIN_DIR=$(pwd)
 
 # Function to stop the bot if it's running
 stop_bot() {
@@ -16,22 +17,24 @@ stop_bot() {
 # More efficient git fetch by only getting the latest commit
 update_repositories() {
     echo "Fetching updates..."
+    cd "$MAIN_DIR" || return 1
     git fetch origin main --depth=1 || echo "Warning: Failed to fetch main repository"
     
-    cd lelandstocks.github.io || { echo "Failed to navigate to submodule directory."; return; }
+    cd "$MAIN_DIR/lelandstocks.github.io" || return 1
     git fetch origin master --depth=1 || echo "Warning: Failed to fetch submodule"
-    cd ../
+    cd "$MAIN_DIR" || return 1
 }
 
 # Optimize change detection using git rev-parse
 check_changes() {
+    cd "$MAIN_DIR" || return 1
     local current_main=$(git rev-parse HEAD)
     local remote_main=$(git rev-parse origin/main)
     
-    cd lelandstocks.github.io || { echo "Failed to navigate to submodule directory."; return 1; }
+    cd "$MAIN_DIR/lelandstocks.github.io" || return 1
     local current_sub=$(git rev-parse HEAD)
     local remote_sub=$(git rev-parse origin/master)
-    cd ../
+    cd "$MAIN_DIR" || return 1
 
     # Compare hashes directly instead of counting commits
     [ "$current_main" != "$remote_main" ] || [ "$current_sub" != "$remote_sub" ]
@@ -44,9 +47,7 @@ while true; do
         update_repositories
         
         if check_changes; then
-            echo "Remote changes detected, updating repositories..."
-            git pull origin main --ff-only || echo "Warning: Failed to pull main repository"
-            cd lelandstocks.github.io && git pull origin master --ff-only && cd ../
+            echo "Changes detected, restarting bot..."
         fi
 
         echo "Starting bot..."
@@ -57,8 +58,7 @@ while true; do
         # Only check for updates if bot is running
         if update_repositories && check_changes; then
             stop_bot
-            git pull origin main --ff-only || echo "Warning: Failed to pull main repository"
-            cd lelandstocks.github.io && git pull origin master --ff-only && cd ../
+            echo "Changes detected, restarting bot..."
             
             echo "Starting bot..."
             pixi run update_discord &

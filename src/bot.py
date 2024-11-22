@@ -21,6 +21,31 @@ from time import time
 # Load environment variables from .env file
 load_dotenv()
 
+# Add required import at the top with other imports
+import aiofiles
+from typing import Optional, Tuple, Dict, Any
+
+# Add this function near the top with other utility functions
+async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
+    """
+    Asynchronously load the latest leaderboard data.
+    Returns None if the file doesn't exist or there's an error.
+    """
+    try:
+        if not os.path.exists(LEADERBOARD_LATEST):
+            return None
+            
+        try:
+            async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
+                content = await f.read()
+                return json.loads(content)
+        except ImportError:
+            with open(LEADERBOARD_LATEST, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading leaderboard data: {e}")
+        return None
+
 # Set up paths
 PATH_TO_LEADERBOARD_DATA = os.environ.get('PATH_TO_LEADERBOARD_DATA')
 LEADERBOARDS_DIR = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/leaderboards')
@@ -133,7 +158,9 @@ async def compare_stock_changes(channel):
                         description=description,
                         timestamp=get_pst_time(),
                     )
-                    await channel.send(embed=embed)
+                    stock_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Stocks")))
+                    if stock_channel:
+                        await stock_channel.send(embed=embed)
 
         # Update the snapshot with current data after comparison
         with open(snapshot_path, "w") as f:
@@ -489,7 +516,7 @@ async def send_leaderboard():
         return
         
     try:
-        # Load current data
+        # Load current data using the async function
         current_data = await load_leaderboard_data()
         if not current_data:
             return
@@ -771,11 +798,23 @@ def calculate_daily_performance(morning_data, current_data):
     return stats
 
 # Async file operations
+import aiofiles  # Add this import
+
+# Move this function earlier in the file, before it's used
 async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
     try:
-        async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
-            content = await f.read()
-            return json.loads(content)
+        # Handle case where file doesn't exist
+        if not os.path.exists(LEADERBOARD_LATEST):
+            return None
+            
+        # Use regular open if aiofiles fails
+        try:
+            async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
+                content = await f.read()
+                return json.loads(content)
+        except ImportError:
+            with open(LEADERBOARD_LATEST, 'r') as f:
+                return json.load(f)
     except Exception as e:
         print(f"Error loading leaderboard data: {e}")
         return None
