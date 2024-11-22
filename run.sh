@@ -13,84 +13,59 @@ stop_bot() {
     fi
 }
 
-# Update repositories: main repo and submodule
+# More efficient git fetch by only getting the latest commit
 update_repositories() {
     echo "Fetching updates..."
-    # Fetch updates for main repo (using origin/main)
-    git fetch origin || echo "Warning: Failed to fetch main repository"
+    git fetch origin main --depth=1 || echo "Warning: Failed to fetch main repository"
     
-    # Fetch updates for submodule (using origin/master)
     cd lelandstocks.github.io || { echo "Failed to navigate to submodule directory."; return; }
-    git fetch origin || echo "Warning: Failed to fetch submodule"
+    git fetch origin master --depth=1 || echo "Warning: Failed to fetch submodule"
     cd ../
 }
 
-# Check for changes in the main repo and submodule
+# Optimize change detection using git rev-parse
 check_changes() {
-    # Compare local with remote for main repo (using origin/main)
-    MAIN_CHANGED=$(git rev-list HEAD...origin/main --count 2>/dev/null || echo "0")
+    local current_main=$(git rev-parse HEAD)
+    local remote_main=$(git rev-parse origin/main)
     
-    # Compare local with remote for submodule (using origin/master)
     cd lelandstocks.github.io || { echo "Failed to navigate to submodule directory."; return 1; }
-    SUB_CHANGED=$(git rev-list HEAD...origin/master --count 2>/dev/null || echo "0")
+    local current_sub=$(git rev-parse HEAD)
+    local remote_sub=$(git rev-parse origin/master)
     cd ../
 
-    echo "Changes detected - Main: $MAIN_CHANGED, Submodule: $SUB_CHANGED"
-    
-    # Return true if either has changes
-    [ "$MAIN_CHANGED" -gt "0" ] || [ "$SUB_CHANGED" -gt "0" ]
+    # Compare hashes directly instead of counting commits
+    [ "$current_main" != "$remote_main" ] || [ "$current_sub" != "$remote_sub" ]
 }
 
-# Main loop for checking updates and restarting the bot
+# Main loop
 while true; do
-    # On the first run, check for updates and start the bot
-    if [ -z "$BOT_PID" ]; then
+    if ! kill -0 $BOT_PID 2>/dev/null; then
+        # Bot not running or crashed, start it
         update_repositories
         
         if check_changes; then
             echo "Remote changes detected, updating repositories..."
-            
-            # Stop the existing bot if running
-            stop_bot
-            
-            # Pull changes for main repo (using origin/main)
-            git pull origin main || echo "Warning: Failed to pull main repository"
-            # Pull changes for submodule (using origin/master)
-            cd lelandstocks.github.io && git pull origin master && cd ../
-        else
-            echo "No changes detected."
+            git pull origin main --ff-only || echo "Warning: Failed to pull main repository"
+            cd lelandstocks.github.io && git pull origin master --ff-only && cd ../
         fi
 
-        # Start the bot after initial check
         echo "Starting bot..."
         pixi run update_discord &
         BOT_PID=$!
         echo "Bot started with PID: $BOT_PID"
     else
-        # While the bot is running, keep checking for updates
-        update_repositories
-        
-        if check_changes; then
-            echo "Remote changes detected, updating repositories..."
-            
-            # Stop the existing bot if running
+        # Only check for updates if bot is running
+        if update_repositories && check_changes; then
             stop_bot
+            git pull origin main --ff-only || echo "Warning: Failed to pull main repository"
+            cd lelandstocks.github.io && git pull origin master --ff-only && cd ../
             
-            # Pull changes for main repo (using origin/main)
-            git pull origin main || echo "Warning: Failed to pull main repository"
-            # Pull changes for submodule (using origin/master)
-            cd lelandstocks.github.io && git pull origin master && cd ../
-            
-            # Restart the bot after updating repositories
             echo "Starting bot..."
             pixi run update_discord &
             BOT_PID=$!
             echo "Bot started with PID: $BOT_PID"
-        else
-            echo "No changes detected. Bot is still running."
         fi
     fi
 
-    # Sleep before checking for updates again
-    sleep 10
+    sleep 300
 done

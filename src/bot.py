@@ -12,6 +12,12 @@ import io
 # Add yfinance import
 import yfinance as yf
 
+# Add caching for expensive operations
+from functools import lru_cache
+from typing import Optional, Tuple, Dict, Any
+from functools import wraps
+from time import time
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -154,63 +160,62 @@ def parse_leaderboard_timestamp(filename):
     return datetime.datetime.strptime(timestamp_str, '%Y-%m-%d-%H_%M')
 
 
+# Replace the lru_cache implementation with a time-based cache
+class TimedCache:
+    def __init__(self, ttl=3600):
+        self.cache = {}
+        self.ttl = ttl
+
+    def __call__(self, func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            key = str(args) + str(kwargs)
+            now = time()
+            if key in self.cache:
+                result, timestamp = self.cache[key]
+                if now - timestamp < self.ttl:
+                    return result
+                del self.cache[key]
+            result = func(*args, **kwargs)
+            self.cache[key] = (result, now)
+            return result
+        return wrapped
+
+# Replace the lru_cache decorator with our custom one
+@TimedCache(ttl=3600)
+def fetch_stock_data(symbol: str, start_date, end_date):
+    return yf.download(symbol, start=start_date, end=end_date, progress=False)
+
+# Optimize the generate_money_graph function
 def generate_money_graph(username):
-    """Generate a graph showing money over time for a user"""
-    import numpy as np
-    
-    # Get all files from in_time directory and sort them by datetime
-    files = [f for f in os.listdir(IN_TIME_DIR) if f.endswith('.json')]
-    files.sort(key=lambda x: parse_leaderboard_timestamp(x))
+    # Use a more efficient file reading method
+    files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
+                  key=lambda x: parse_leaderboard_timestamp(x.name))
     
     if not files:
         return None, None, None
 
-    # Get start and end dates
-    start_date = parse_leaderboard_timestamp(files[0])
-    end_date = parse_leaderboard_timestamp(files[-1])
-    
-    # Fetch S&P 500 data starting from August 13th
-    try:
-        spy_start_date = datetime.datetime(2024, 8, 13)
-        spy = yf.download('^GSPC', start=spy_start_date, end=end_date, progress=False)
-        # Calculate what $100k would be worth based on S&P 500 performance
-        initial_spy_price = spy['Close'].iloc[0]
-        spy_returns = spy['Close'] / initial_spy_price
-        spy_values = 100000 * spy_returns
-        # Convert user's timestamps to timezone-aware
-        start_date = start_date.replace(tzinfo=spy.index.tz)
-        end_date = end_date.replace(tzinfo=spy.index.tz)
-        # Filter S&P 500 data to match the user's date range
-        spy = spy.loc[start_date:end_date]
-        spy_values = spy_values.loc[start_date:end_date]
-    except Exception as e:
-        print(f"Error fetching S&P 500 data: {e}")
-        spy_values = None
-    
-    # Create DataFrame to store data
+    # Pre-allocate data structures
     data = {
         'timestamp': [],
-        username: [],  # Target user
+        username: []
     }
-    
-    # Collect data for user
-    for file in files:
-        try:
-            with open(os.path.join(IN_TIME_DIR, file), 'r') as f:
-                file_data = json.load(f)
-                timestamp = parse_leaderboard_timestamp(file)
-                
-                if username not in file_data:
-                    continue
-                
-                # Append data
-                data['timestamp'].append(timestamp.replace(tzinfo=spy.index.tz))
-                data[username].append(float(file_data[username][0]))
-                
-        except Exception as e:
-            print(f"Error reading file {file}: {e}")
-            continue
-    
+
+    # Read files in chunks
+    chunk_size = 50
+    for i in range(0, len(files), chunk_size):
+        chunk = files[i:i + chunk_size]
+        for file in chunk:
+            try:
+                with open(file.path) as f:
+                    file_data = json.load(f)
+                if username in file_data:
+                    timestamp = parse_leaderboard_timestamp(file.name)
+                    data['timestamp'].append(timestamp)
+                    data[username].append(float(file_data[username][0]))
+            except Exception as e:
+                print(f"Error reading file {file.name}: {e}")
+
     if not data['timestamp']:
         return None, None, None
     
@@ -466,6 +471,7 @@ def have_rankings_changed(previous_data, current_data):
     # Compare top 10 rankings
     return prev_rankings[:10] != curr_rankings[:10]
 
+# Optimize leaderboard updates
 @tasks.loop(minutes=1)
 async def send_leaderboard():
     """
@@ -484,9 +490,10 @@ async def send_leaderboard():
         
     try:
         # Load current data
-        with open(LEADERBOARD_LATEST, "r") as file:
-            current_data = json.load(file)
-            
+        current_data = await load_leaderboard_data()
+        if not current_data:
+            return
+
         # Load previous data from snapshot
         snapshot_path = "./snapshots/leaderboard-snapshot.json"
         previous_data = None
@@ -762,3 +769,13 @@ def calculate_daily_performance(morning_data, current_data):
     stats["most_active"] = stats["most_active"][:3]  # Keep top 3 most active
     
     return stats
+
+# Async file operations
+async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
+    try:
+        async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
+            content = await f.read()
+            return json.loads(content)
+    except Exception as e:
+        print(f"Error loading leaderboard data: {e}")
+        return None
