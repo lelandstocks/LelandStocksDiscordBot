@@ -14,9 +14,9 @@ stop_bot() {
     fi
 }
 
-# More efficient git fetch by only getting the latest commit
+# Only fetch updates without merging
 update_repositories() {
-    echo "Fetching updates..."
+    echo "Checking for updates..."
     cd "$MAIN_DIR" || return 1
     git fetch origin main --depth=1 || echo "Warning: Failed to fetch main repository"
     
@@ -25,19 +25,22 @@ update_repositories() {
     cd "$MAIN_DIR" || return 1
 }
 
-# Optimize change detection using git rev-parse
+# Check for changes without merging
 check_changes() {
     cd "$MAIN_DIR" || return 1
-    local current_main=$(git rev-parse HEAD)
-    local remote_main=$(git rev-parse origin/main)
+    # Check if local is behind remote
+    local main_behind=$(git rev-list HEAD..origin/main --count 2>/dev/null)
     
     cd "$MAIN_DIR/lelandstocks.github.io" || return 1
-    local current_sub=$(git rev-parse HEAD)
-    local remote_sub=$(git rev-parse origin/master)
+    local sub_behind=$(git rev-list HEAD..origin/master --count 2>/dev/null)
     cd "$MAIN_DIR" || return 1
 
-    # Compare hashes directly instead of counting commits
-    [ "$current_main" != "$remote_main" ] || [ "$current_sub" != "$remote_sub" ]
+    # If either repository has changes
+    if [ "$main_behind" -gt 0 ] || [ "$sub_behind" -gt 0 ]; then
+        echo "Updates available but not merging automatically"
+        return 0
+    fi
+    return 1
 }
 
 # Main loop

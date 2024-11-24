@@ -247,7 +247,7 @@ def generate_money_graph(username):
         return None, None, None
 
     # Plotting
-    plt.style.use('default')
+    plt.style.use('dark_background')
     plt.figure(figsize=(12, 6))
 
     # Plot S&P 500 if data is available
@@ -437,7 +437,6 @@ async def setup_hook():
 bot.setup_hook = setup_hook
 
 @bot.tree.command(name="leaderboard", description="Get current leaderboard")
-@app_commands.describe(count="Number of top users to display (default: 10)")
 async def leaderboard(interaction: discord.Interaction):
     """
     Respond to the /leaderboard command with the top 10 users' info.
