@@ -235,7 +235,12 @@ def generate_money_graph(username):
                 if username in file_data:
                     timestamp = parse_leaderboard_timestamp(file.name)
                     timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
-                    value = float(file_data[username][0])
+                    # Extract the account value, handling possible nested lists
+                    value_data = file_data[username][0]
+                    if isinstance(value_data, list):
+                        value = float(value_data[0])
+                    else:
+                        value = float(value_data)
                     if first_value is None:
                         first_value = value
                     data['timestamp'].append(timestamp)
@@ -295,28 +300,35 @@ def generate_money_graph(username):
 
         # Calculate extreme values including S&P 500
         values = data[username]
-        all_values = [float(v) for v in values if v is not None]  # Convert values to float
-        
+        user_values = []
+        for v in values:
+            if v is not None:
+                if isinstance(v, list):
+                    v = v[0]
+                user_values.append(float(v))
+
+        # Update user's extreme points calculation
+        user_lowest = min(user_values)
+        user_highest = max(user_values)
+
+        all_values = user_values.copy()
+
         if spy_values is not None:
-            # Convert spy_values to numeric list safely
-            if hasattr(spy_values, 'values'):
-                spy_list = spy_values.values.tolist()
-            else:
-                spy_list = spy_values.tolist() if hasattr(spy_values, 'tolist') else list(spy_values)
-            # Convert spy values to float and filter None values
-            spy_list = [float(v) for v in spy_list if v is not None]
-            all_values.extend(spy_list)
-        
+            # Convert spy_values to a list of floats
+            spy_list = spy_values.tolist()
+            spy_values_list = []
+            for v in spy_list:
+                if v is not None:
+                    if isinstance(v, list):
+                        v = v[0]
+                    spy_values_list.append(float(v))
+            all_values.extend(spy_values_list)
+
         if not all_values:
             return None, None, None
             
         lowest_value = min(all_values)
         highest_value = max(all_values)
-
-        # Update user's extreme points calculation
-        user_values = [float(v) for v in values if v is not None]
-        user_lowest = min(user_values)
-        user_highest = max(user_values)
 
         # Add markers for user's extreme points
         fig.add_trace(
