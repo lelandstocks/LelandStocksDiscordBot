@@ -54,14 +54,43 @@ check_changes() {
     return 1
 }
 
+# Function to resolve merge conflicts
+resolve_conflicts() {
+    local repo_dir="$1"
+    cd "$repo_dir" || return 1
+    
+    # Stash any local changes
+    git stash
+    
+    # Force reset to remote branch
+    if [[ "$repo_dir" == *"lelandstocks.github.io"* ]]; then
+        git reset --hard origin/master
+    else
+        git reset --hard origin/main
+    fi
+    
+    # Pop stashed changes if any
+    git stash pop 2>/dev/null || true
+}
+
 # Function to force merge updates
 force_merge_repositories() {
     log "🔄 Force merging updates..."
-    cd "$MAIN_DIR" || { log "❌ Failed to change to main directory"; return 1; }
-    git pull --allow-unrelated-histories origin main || { log "⚠️  Warning: Failed to merge main repository"; return 1; }
     
+    # Main repository
+    cd "$MAIN_DIR" || { log "❌ Failed to change to main directory"; return 1; }
+    if ! git pull --allow-unrelated-histories origin main; then
+        log "⚠️ Merge conflict detected in main repository, attempting to resolve..."
+        resolve_conflicts "$MAIN_DIR"
+    fi
+    
+    # Submodule
     cd "$MAIN_DIR/lelandstocks.github.io" || { log "❌ Failed to change to submodule directory"; return 1; }
-    git pull --allow-unrelated-histories origin master || { log "⚠️  Warning: Failed to merge submodule"; return 1; }
+    if ! git pull --allow-unrelated-histories origin master; then
+        log "⚠️ Merge conflict detected in submodule, attempting to resolve..."
+        resolve_conflicts "$MAIN_DIR/lelandstocks.github.io"
+    fi
+    
     cd "$MAIN_DIR" || return 1
     log "✅ Merge complete"
 }
