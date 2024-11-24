@@ -1,19 +1,6 @@
-# Standard library imports
 import discord
 from discord.ext import commands, tasks
-# ...existing code...
-
-# Third-party imports for data handling and visualization
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-# ...existing code...
-
-# Caching and type hint imports
-from functools import lru_cache
-from typing import Optional, Tuple, Dict, Any
-# ...existing code...
-
+from discord import app_commands
 import datetime
 import os
 import json
@@ -393,6 +380,7 @@ class UserInfo(commands.Cog):
     """
     Cog to handle user information related commands.
     """
+
     def __init__(self, bot):
         self.bot = bot
 
@@ -729,6 +717,18 @@ async def start_of_day():
 
 @tasks.loop(time=datetime.time(hour=16, minute=0, tzinfo=EST))
 async def send_daily_summary():
+    """Send daily summary comparing start of day to end of day"""
+    now = datetime.datetime.now(EST)
+    if now.weekday() < 5:  # Only on weekdays
+        try:
+            # Load morning snapshot instead of previous day's snapshot
+            morning_snapshot_path = MORNING_SNAPSHOT_PATH
+            if not os.path.exists(morning_snapshot_path):
+                print("No morning snapshot found")
+                return
+
+            with open(morning_snapshot_path, "r") as f:
+                morning_data = json.load(f)
 
             # Load end of day data
             with open(LEADERBOARDS_DIR, "r") as f:
