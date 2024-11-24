@@ -221,160 +221,146 @@ def fetch_stock_data(symbol: str, start_date, end_date):
 def generate_money_graph(username):
     """Generate a time series graph for a user's account value"""
     try:
-        # Get end date and start date
-        end_date = datetime.datetime.now(datetime.timezone.utc)
-        # Get earliest user data point to use as start date
+        # Get all JSON files sorted by timestamp
         files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
                       key=lambda x: parse_leaderboard_timestamp(x.name))
         
-        first_data = None
+        # Load user data first to determine date range
+        data = {'timestamp': [], username: []}
         for file in files:
-            with open(file.path) as f:
-                file_data = json.load(f)
-            if username in file_data:
-                first_data = parse_leaderboard_timestamp(file.name)
-                # Add UTC timezone to first_data
-                first_data = first_data.replace(tzinfo=datetime.timezone.utc)
-                break
-        
-        if first_data:
-            spy_data = fetch_stock_data("SPY", first_data, end_date)
+            try:
+                with open(file.path) as f:
+                    file_data = json.load(f)
+                if username in file_data:
+                    timestamp = parse_leaderboard_timestamp(file.name)
+                    # Add timezone info if missing
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
+                    data['timestamp'].append(timestamp)
+                    data[username].append(float(file_data[username][0]))
+            except Exception as e:
+                print(f"Error reading file {file.name}: {e}")
+
+        if not data['timestamp']:
+            return None, None, None
+
+        # Get date range for S&P 500 data
+        start_date = min(data['timestamp'])
+        end_date = max(data['timestamp'])
+
+        # Fetch S&P 500 data
+        try:
+            spy_data = fetch_stock_data("SPY", start_date, end_date)
             if not spy_data.empty:
+                # Normalize S&P data to match $100k starting investment
                 initial_spy = spy_data['Close'].iloc[0]
-                spy_values = spy_data['Close'] * (100000 / initial_spy)  # Normalize to $100k investment
-                spy = spy_data
-                # Ensure spy index is UTC
-                if spy.index.tz is None:
-                    spy.index = spy.index.tz_localize('UTC')
+                spy_values = spy_data['Close'] * (100000 / initial_spy)
+                
+                # Ensure timezone aware
+                if spy_data.index.tz is None:
+                    spy_data.index = spy_data.index.tz_localize('UTC')
             else:
                 spy_values = None
-                spy = None
-        else:
-            spy_values = None
-            spy = None
-    except Exception as e:
-        print(f"Error fetching S&P 500 data: {e}")
-        spy_values = None
-        spy = None
-
-    # Load user data with UTC timezone
-    data = {'timestamp': [], username: []}
-    for file in files:
-        try:
-            with open(file.path) as f:
-                file_data = json.load(f)
-            if username in file_data:
-                timestamp = parse_leaderboard_timestamp(file.name)
-                # Add UTC timezone to timestamp
-                timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
-                data['timestamp'].append(timestamp)
-                data[username].append(float(file_data[username][0]))
+                spy_data = None
         except Exception as e:
-            print(f"Error reading file {file.name}: {e}")
+            print(f"Error fetching S&P 500 data: {e}")
+            spy_values = None
+            spy_data = None
 
-    if not data['timestamp']:
-        return None, None, None
+        # Create figure
+        fig = go.Figure()
 
-    # Create figure
-    fig = go.Figure()
-
-    # Add user's trace first
-    fig.add_trace(
-        go.Scatter(
-            x=data['timestamp'],
-            y=data[username],
-            name=username,
-            line=dict(color='rgb(0, 100, 255)', width=2.5),
-            mode='lines+markers',
-            marker=dict(size=6)
-        )
-    )
-
-    # Add S&P 500 trace if available with matching date range
-    if spy_values is not None and not spy.empty:
-        # Use timestamps directly since they're already UTC
-        min_time = min(data['timestamp'])
-        max_time = max(data['timestamp'])
-        
-        # Filter S&P data to match user's date range
-        mask = (spy.index >= min_time) & (spy.index <= max_time)
-        spy_filtered = spy[mask]
-        spy_values_filtered = spy_values[mask]
-        
+        # Add user's trace
         fig.add_trace(
             go.Scatter(
-                x=spy_filtered.index,
-                y=spy_values_filtered,
-                name='S&P 500 ($100k invested)',
-                line=dict(color='gray', dash='dash'),
-                opacity=0.5
+                x=data['timestamp'],
+                y=data[username],
+                name=username,
+                line=dict(color='rgb(0, 100, 255)', width=2.5),
+                mode='lines+markers',
+                marker=dict(size=6)
             )
         )
 
-    # Calculate extreme values
-    values = data[username]
-    lowest_value = min(values)
-    highest_value = max(values)
+        # Add S&P 500 trace if available
+        if spy_values is not None and not spy_data.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=spy_data.index,
+                    y=spy_values,
+                    name='S&P 500 ($100k invested)',
+                    line=dict(color='gray', dash='dash'),
+                    opacity=0.5
+                )
+            )
 
-    # Add markers for extreme points
-    fig.add_trace(
-        go.Scatter(
-            x=[data['timestamp'][values.index(lowest_value)]],
-            y=[lowest_value],
-            mode='markers+text',
-            name='Lowest',
-            marker=dict(color='red', size=12),
-            text=[f'${lowest_value:,.2f}'],
-            textposition='top center'
+        # Calculate extreme values
+        values = data[username]
+        lowest_value = min(values)
+        highest_value = max(values)
+
+        # Add markers for extreme points
+        fig.add_trace(
+            go.Scatter(
+                x=[data['timestamp'][values.index(lowest_value)]],
+                y=[lowest_value],
+                mode='markers+text',
+                name='Lowest',
+                marker=dict(color='red', size=12),
+                text=[f'${lowest_value:,.2f}'],
+                textposition='top center'
+            )
         )
-    )
 
-    fig.add_trace(
-        go.Scatter(
-            x=[data['timestamp'][values.index(highest_value)]],
-            y=[highest_value],
-            mode='markers+text',
-            name='Highest',
-            marker=dict(color='green', size=12),
-            text=[f'${highest_value:,.2f}'],
-            textposition='top center'
+        fig.add_trace(
+            go.Scatter(
+                x=[data['timestamp'][values.index(highest_value)]],
+                y=[highest_value],
+                mode='markers+text',
+                name='Highest',
+                marker=dict(color='green', size=12),
+                text=[f'${highest_value:,.2f}'],
+                textposition='top center'
+            )
         )
-    )
 
-    # Update layout
-    fig.update_layout(
-        title=dict(
-            text=f"Account Value Over Time - {username}",
-            x=0.05,
-            font=dict(size=16)
-        ),
-        xaxis_title="Time",
-        yaxis_title="Account Value ($)",
-        template="plotly_dark",
-        plot_bgcolor='rgba(44, 47, 51, 1)',
-        paper_bgcolor='rgba(44, 47, 51, 1)',
-        font=dict(color='white'),
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        ),
-        margin=dict(t=30, l=10, r=10, b=10)
-    )
+        # Update layout
+        fig.update_layout(
+            title=dict(
+                text=f"Account Value Over Time - {username}",
+                x=0.05,
+                font=dict(size=16)
+            ),
+            xaxis_title="Time",
+            yaxis_title="Account Value ($)",
+            template="plotly_dark",
+            plot_bgcolor='rgba(44, 47, 51, 1)',
+            paper_bgcolor='rgba(44, 47, 51, 1)',
+            font=dict(color='white'),
+            showlegend=True,
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            ),
+            margin=dict(t=30, l=10, r=10, b=10)
+        )
 
-    # Format axes
-    fig.update_yaxes(tickprefix="$", tickformat=",.0f")
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+        # Format axes
+        fig.update_yaxes(tickprefix="$", tickformat=",.0f")
+        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
 
-    # Save to buffer
-    buf = io.BytesIO()
-    fig.write_image(buf, format='png', engine='kaleido')
-    buf.seek(0)
-    
-    return buf, lowest_value, highest_value
+        # Save to buffer
+        buf = io.BytesIO()
+        fig.write_image(buf, format='png', engine='kaleido')
+        buf.seek(0)
+        
+        return buf, lowest_value, highest_value
+    except Exception as e:
+        print(f"Error generating money graph: {e}")
+        return None, None, None
 
 def get_embed_color():
     """Get the appropriate embed color based on testing mode"""
