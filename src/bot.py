@@ -297,9 +297,19 @@ def generate_money_graph(username):
         values = data[username]
         all_values = values.copy()
         if spy_values is not None:
-            # Convert spy_values to a list properly
-            all_values.extend(spy_values.values.tolist() if hasattr(spy_values, 'values') else spy_values.tolist())
+            # Convert spy_values to numeric list safely
+            if hasattr(spy_values, 'values'):
+                spy_list = spy_values.values.tolist()
+            else:
+                spy_list = spy_values.tolist() if hasattr(spy_values, 'tolist') else list(spy_values)
+            all_values.extend(spy_list)
         
+        # Convert all values to float
+        all_values = [float(x) for x in all_values if x is not None]
+        
+        if not all_values:
+            return None, None, None
+            
         lowest_value = min(all_values)
         highest_value = max(all_values)
 
@@ -465,11 +475,15 @@ class UserInfo(commands.Cog):
         """
         Provide autocomplete suggestions for usernames based on current input.
         """
-        return [
-            app_commands.Choice(name=username, value=username)
-            for username in usernames_list
-            if current.lower() in username.lower()
-        ][:25]
+        try:
+            return [
+                app_commands.Choice(name=username, value=username)
+                for username in usernames_list
+                if current.lower() in username.lower()
+            ][:25]
+        except Exception as e:
+            print(f"Error in autocomplete: {e}")
+            return []
 
 
 async def setup(bot):
