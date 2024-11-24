@@ -43,6 +43,17 @@ check_changes() {
     return 1
 }
 
+# Function to force merge updates
+force_merge_repositories() {
+    echo "Force merging updates..."
+    cd "$MAIN_DIR" || return 1
+    git pull --allow-unrelated-histories origin main || echo "Warning: Failed to merge main repository"
+    
+    cd "$MAIN_DIR/lelandstocks.github.io" || return 1
+    git pull --allow-unrelated-histories origin master || echo "Warning: Failed to merge submodule"
+    cd "$MAIN_DIR" || return 1
+}
+
 # Main loop
 while true; do
     if ! kill -0 $BOT_PID 2>/dev/null; then
@@ -51,6 +62,7 @@ while true; do
         
         if check_changes; then
             echo "Changes detected, restarting bot..."
+            force_merge_repositories
         fi
 
         echo "Starting bot..."
@@ -62,6 +74,7 @@ while true; do
         if update_repositories && check_changes; then
             stop_bot
             echo "Changes detected, restarting bot..."
+            force_merge_repositories
             
             echo "Starting bot..."
             pixi run update_discord &
