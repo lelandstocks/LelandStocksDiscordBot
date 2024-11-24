@@ -391,8 +391,10 @@ class UserInfo(commands.Cog):
         Respond to the /userinfo command with the user's information.
         """
         try:
-            # Defer the response immediately
             await interaction.response.defer(thinking=True)
+        except discord.NotFound:
+            # If the interaction is no longer valid, just return
+            return
         except Exception as e:
             # If deferring fails, log the error and exit
             print(f"Failed to defer interaction: {e}")
@@ -494,8 +496,8 @@ def generate_leaderboard_graph(top_users_data):
     if not files:
         return None
 
-    # Get top 10 usernames
-    usernames = top_users_data['Account Name'].tolist()
+    # Convert DataFrame to list of usernames
+    usernames = top_users_data['Account Name'].values.tolist()
 
     # Create data structure for time series
     data = {
@@ -579,7 +581,12 @@ async def leaderboard(interaction: discord.Interaction):
     """
     Respond to the /leaderboard command with the top 10 users' info.
     """
-    await interaction.response.defer()
+    try:
+        await interaction.response.defer(thinking=True)
+    except discord.NotFound:
+        # If the interaction is no longer valid, just return
+        return
+
     try:
         # Load current data
         current_data = await load_leaderboard_data()
