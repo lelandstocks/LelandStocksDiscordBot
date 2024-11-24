@@ -7,7 +7,6 @@ import json
 import pandas as pd
 from pytz import timezone
 from dotenv import load_dotenv
-import matplotlib.pyplot as plt
 import io
 # Add yfinance import
 import yfinance as yf
@@ -24,6 +23,11 @@ load_dotenv()
 # Add required import at the top with other imports
 import aiofiles
 from typing import Optional, Tuple, Dict, Any
+
+# Remove matplotlib import and add plotly imports
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
 # Add this function near the top with other utility functions
 async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
@@ -215,111 +219,161 @@ def fetch_stock_data(symbol: str, start_date, end_date):
 
 # Optimize the generate_money_graph function
 def generate_money_graph(username):
-    # Use a more efficient file reading method
-    files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
-                  key=lambda x: parse_leaderboard_timestamp(x.name))
+    """Generate a time series graph for a user's account value"""
+    try:
+        # Get end date and start date
+        end_date = datetime.datetime.now(datetime.timezone.utc)
+        # Get earliest user data point to use as start date
+        files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
+                      key=lambda x: parse_leaderboard_timestamp(x.name))
+        
+        first_data = None
+        for file in files:
+            with open(file.path) as f:
+                file_data = json.load(f)
+            if username in file_data:
+                first_data = parse_leaderboard_timestamp(file.name)
+                # Add UTC timezone to first_data
+                first_data = first_data.replace(tzinfo=datetime.timezone.utc)
+                break
+        
+        if first_data:
+            spy_data = fetch_stock_data("SPY", first_data, end_date)
+            if not spy_data.empty:
+                initial_spy = spy_data['Close'].iloc[0]
+                spy_values = spy_data['Close'] * (100000 / initial_spy)  # Normalize to $100k investment
+                spy = spy_data
+                # Ensure spy index is UTC
+                if spy.index.tz is None:
+                    spy.index = spy.index.tz_localize('UTC')
+            else:
+                spy_values = None
+                spy = None
+        else:
+            spy_values = None
+            spy = None
+    except Exception as e:
+        print(f"Error fetching S&P 500 data: {e}")
+        spy_values = None
+        spy = None
 
-    if not files:
-        return None, None, None
-
-    # Pre-allocate data structures
-    data = {
-        'timestamp': [],
-        username: []
-    }
-
-    # Read files in chunks
-    chunk_size = 50
-    for i in range(0, len(files), chunk_size):
-        chunk = files[i:i + chunk_size]
-        for file in chunk:
-            try:
-                with open(file.path) as f:
-                    file_data = json.load(f)
-                if username in file_data:
-                    timestamp = parse_leaderboard_timestamp(file.name)
-                    data['timestamp'].append(timestamp)
-                    data[username].append(float(file_data[username][0]))
-            except Exception as e:
-                print(f"Error reading file {file.name}: {e}")
+    # Load user data with UTC timezone
+    data = {'timestamp': [], username: []}
+    for file in files:
+        try:
+            with open(file.path) as f:
+                file_data = json.load(f)
+            if username in file_data:
+                timestamp = parse_leaderboard_timestamp(file.name)
+                # Add UTC timezone to timestamp
+                timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
+                data['timestamp'].append(timestamp)
+                data[username].append(float(file_data[username][0]))
+        except Exception as e:
+            print(f"Error reading file {file.name}: {e}")
 
     if not data['timestamp']:
         return None, None, None
 
-    # Plotting
-    plt.style.use('dark_background')
-    plt.figure(figsize=(12, 6))
+    # Create figure
+    fig = go.Figure()
 
-    # Plot S&P 500 if data is available
-    if spy_values is not None:
-        plt.plot(spy.index, spy_values,
-                color='gray', linewidth=1.5, alpha=0.5,
-                label='S&P 500 ($100k invested)', linestyle='--')
+    # Add user's trace first
+    fig.add_trace(
+        go.Scatter(
+            x=data['timestamp'],
+            y=data[username],
+            name=username,
+            line=dict(color='rgb(0, 100, 255)', width=2.5),
+            mode='lines+markers',
+            marker=dict(size=6)
+        )
+    )
 
-    # Plot target user
-    plt.plot(data['timestamp'], data[username],
-             color='blue', linewidth=2.5, alpha=0.8,
-             marker='o', markersize=5,
-             label=f"{username}")
-
-    # Find extreme values for the user
-    lowest_value = min(data[username])
-    highest_value = max(data[username])
-    lowest_idx = data[username].index(lowest_value)
-    highest_idx = data[username].index(highest_value)
-    lowest_timestamp = data['timestamp'][lowest_idx]
-    highest_timestamp = data['timestamp'][highest_idx]
-
-    # Customize the plot
-    plt.title(f"Account Value Over Time - {username}",
-              loc='left', fontsize=12, fontweight='bold')
-    plt.xlabel("Time")
-    plt.ylabel("Account Value ($)")
-    plt.grid(True, alpha=0.2)
-    plt.xticks(rotation=45)
-
-    # Add annotations for final values
-    last_timestamp = data['timestamp'][-1]
-    final_value = data[username][-1]
-    plt.text(last_timestamp, final_value,
-            f' Current\n ${final_value:,.2f}',
-            verticalalignment='center', fontsize=8)
-
-    # Add annotation for S&P 500 if available
-    if spy_values is not None:
-        final_spy_value = float(spy_values.iloc[-1].item())  # Proper float conversion
-        plt.text(spy.index[-1], final_spy_value,
-                f' S&P 500\n ${final_spy_value:,.2f}',
-                verticalalignment='center', fontsize=8)
-
-    # Plot and annotate extreme points
-    plt.scatter([lowest_timestamp], [lowest_value], color='red', zorder=5, s=100)
-    plt.scatter([highest_timestamp], [highest_value], color='green', zorder=5, s=100)
-
-    for value, timestamp, color, label in [
-        (lowest_value, lowest_timestamp, 'red', 'Lowest'),
-        (highest_value, highest_timestamp, 'green', 'Highest')
-    ]:
-        plt.annotate(
-            f'{label}: ${value:,.2f}',
-            xy=(timestamp, value),
-            xytext=(10, -20 if label == 'Lowest' else 20),
-            textcoords='offset points',
-            ha='left',
-            color=color,
-            fontweight='bold',
-            bbox=dict(facecolor='white', edgecolor=color, alpha=0.7, pad=2)
+    # Add S&P 500 trace if available with matching date range
+    if spy_values is not None and not spy.empty:
+        # Use timestamps directly since they're already UTC
+        min_time = min(data['timestamp'])
+        max_time = max(data['timestamp'])
+        
+        # Filter S&P data to match user's date range
+        mask = (spy.index >= min_time) & (spy.index <= max_time)
+        spy_filtered = spy[mask]
+        spy_values_filtered = spy_values[mask]
+        
+        fig.add_trace(
+            go.Scatter(
+                x=spy_filtered.index,
+                y=spy_values_filtered,
+                name='S&P 500 ($100k invested)',
+                line=dict(color='gray', dash='dash'),
+                opacity=0.5
+            )
         )
 
-    plt.legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
-    plt.tight_layout()
+    # Calculate extreme values
+    values = data[username]
+    lowest_value = min(values)
+    highest_value = max(values)
 
-    # Save plot to bytes buffer
+    # Add markers for extreme points
+    fig.add_trace(
+        go.Scatter(
+            x=[data['timestamp'][values.index(lowest_value)]],
+            y=[lowest_value],
+            mode='markers+text',
+            name='Lowest',
+            marker=dict(color='red', size=12),
+            text=[f'${lowest_value:,.2f}'],
+            textposition='top center'
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[data['timestamp'][values.index(highest_value)]],
+            y=[highest_value],
+            mode='markers+text',
+            name='Highest',
+            marker=dict(color='green', size=12),
+            text=[f'${highest_value:,.2f}'],
+            textposition='top center'
+        )
+    )
+
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text=f"Account Value Over Time - {username}",
+            x=0.05,
+            font=dict(size=16)
+        ),
+        xaxis_title="Time",
+        yaxis_title="Account Value ($)",
+        template="plotly_dark",
+        plot_bgcolor='rgba(44, 47, 51, 1)',
+        paper_bgcolor='rgba(44, 47, 51, 1)',
+        font=dict(color='white'),
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(t=30, l=10, r=10, b=10)
+    )
+
+    # Format axes
+    fig.update_yaxes(tickprefix="$", tickformat=",.0f")
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+
+    # Save to buffer
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='white')
+    fig.write_image(buf, format='png', engine='kaleido')
     buf.seek(0)
-    plt.close()
-
+    
     return buf, lowest_value, highest_value
 
 def get_embed_color():
@@ -436,6 +490,95 @@ async def setup_hook():
 
 bot.setup_hook = setup_hook
 
+def generate_leaderboard_graph(top_users_data):
+    """Generate a line chart showing the top 10 users' performance over time"""
+    # Get all JSON files sorted by timestamp
+    files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
+                  key=lambda x: parse_leaderboard_timestamp(x.name))
+
+    if not files:
+        return None
+
+    # Get top 10 usernames
+    usernames = top_users_data['Account Name'].tolist()
+
+    # Create data structure for time series
+    data = {
+        'timestamp': [],
+        **{username: [] for username in usernames}
+    }
+
+    # Read data for each timestamp
+    for file in files:
+        try:
+            with open(file.path) as f:
+                file_data = json.load(f)
+            timestamp = parse_leaderboard_timestamp(file.name)
+            data['timestamp'].append(timestamp)
+            for username in usernames:
+                if username in file_data:
+                    data[username].append(float(file_data[username][0]))
+                else:
+                    data[username].append(None)
+        except Exception as e:
+            print(f"Error reading file {file.name}: {e}")
+
+    if not data['timestamp']:
+        return None
+
+    # Create figure
+    fig = go.Figure()
+
+    # Add trace for each user
+    colors = px.colors.qualitative.Set3  # Using a color sequence
+    for i, username in enumerate(usernames):
+        fig.add_trace(
+            go.Scatter(
+                x=data['timestamp'],
+                y=data[username],
+                name=username,
+                line=dict(color=colors[i % len(colors)], width=2),
+                mode='lines+markers',
+                marker=dict(size=4)
+            )
+        )
+
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text="Top 10 Users Performance Over Time",
+            x=0.05,
+            font=dict(size=16)
+        ),
+        xaxis_title="Time",
+        yaxis_title="Account Value ($)",
+        template="plotly_dark",
+        plot_bgcolor='rgba(44, 47, 51, 1)',
+        paper_bgcolor='rgba(44, 47, 51, 1)',
+        font=dict(color='white'),
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(t=30, l=10, r=10, b=10)
+    )
+
+    # Format axes
+    fig.update_yaxes(tickprefix="$", tickformat=",.0f")
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+
+    # Save to buffer
+    buf = io.BytesIO()
+    fig.write_image(buf, format='png', engine='kaleido')
+    buf.seek(0)
+    
+    return buf
+
+# Update the leaderboard command to include the graph
 @bot.tree.command(name="leaderboard", description="Get current leaderboard")
 async def leaderboard(interaction: discord.Interaction):
     """
@@ -456,7 +599,7 @@ async def leaderboard(interaction: discord.Interaction):
         df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
         # Format description
-        top_users = df.head(10)
+        top_users = df.head(5)  # Changed from 10 to 5
         description = ""
         for idx, row in enumerate(top_users.iterrows(), 1):
             _, row = row
@@ -471,31 +614,18 @@ async def leaderboard(interaction: discord.Interaction):
             timestamp=get_pst_time(),
         )
 
-        await interaction.followup.send(embed=embed)
+        # After creating the embed, add the graph
+        graph_buffer = generate_leaderboard_graph(top_users)
+        if graph_buffer:
+            file = discord.File(graph_buffer, filename="leaderboard_graph.png")
+            embed.set_image(url="attachment://leaderboard_graph.png")
+            await interaction.followup.send(embed=embed, file=file)
+        else:
+            await interaction.followup.send(embed=embed)
 
     except Exception as e:
         print(f"Error in leaderboard command: {str(e)}")
         await interaction.followup.send(f"Error fetching leaderboard: {str(e)}")
-
-
-def have_rankings_changed(previous_data, current_data):
-    """
-    Compare previous and current data to check if rankings have changed.
-    Returns True if rankings changed, False otherwise.
-    """
-    if not previous_data or not current_data:
-        return True
-
-    # Convert both datasets into sorted lists of (username, money) tuples
-    prev_rankings = [(name, float(data[0])) for name, data in previous_data.items()]
-    curr_rankings = [(name, float(data[0])) for name, data in current_data.items()]
-
-    # Sort by money in descending order
-    prev_rankings.sort(key=lambda x: x[1], reverse=True)
-    curr_rankings.sort(key=lambda x: x[1], reverse=True)
-
-    # Compare top 10 rankings
-    return prev_rankings[:10] != curr_rankings[:10]
 
 # Optimize leaderboard updates
 @tasks.loop(minutes=1)
@@ -540,7 +670,7 @@ async def send_leaderboard():
             df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
             # Format description
-            top_users = df.head(10)
+            top_users = df.head(5)  # Changed from 10 to 5
             description = ""
             for idx, row in enumerate(top_users.iterrows(), 1):
                 _, row = row
@@ -558,6 +688,12 @@ async def send_leaderboard():
                     timestamp=get_pst_time(),
                 )
 
+                # Add graph to the embed
+                graph_buffer = generate_leaderboard_graph(top_users)
+                if graph_buffer:
+                    file = discord.File(graph_buffer, filename="leaderboard_graph.png")
+                    embed.set_image(url="attachment://leaderboard_graph.png")
+
                 # Add reason for update
                 if is_market_open:
                     embed.set_footer(text="Market Open Update")
@@ -566,7 +702,7 @@ async def send_leaderboard():
                 elif rankings_changed:
                     embed.set_footer(text="Rankings Changed")
 
-                await leaderboard_channel.send(embed=embed)
+                await leaderboard_channel.send(embed=embed, file=file if graph_buffer else None)
 
             # Update snapshot after sending
             with open(snapshot_path, "w") as f:
@@ -600,7 +736,7 @@ async def send_daily_summary():
                 morning_data = json.load(f)
 
             # Load end of day data
-            with open(LEADERBOARD_LATEST, "r") as f:
+            with open(LEADERBOARDS_DIR, "r") as f:
                 current_data = json.load(f)
 
             # Calculate performance using morning data
@@ -817,3 +953,30 @@ async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"Error loading leaderboard data: {e}")
         return None
+
+def have_rankings_changed(previous_data, current_data):
+    """
+    Compare previous and current data to check if rankings have changed.
+    Returns True only if the order of names has changed in top 5.
+    """
+    if not previous_data or not current_data:
+        return True
+
+    # Get sorted lists of just usernames (no amounts)
+    prev_rankings = sorted(
+        [(name, float(data[0])) for name, data in previous_data.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )[:5]
+    
+    curr_rankings = sorted(
+        [(name, float(data[0])) for name, data in current_data.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )[:5]
+
+    # Compare just the usernames in their positions
+    prev_names = [name for name, _ in prev_rankings]
+    curr_names = [name for name, _ in curr_rankings]
+    
+    return prev_names != curr_names

@@ -23,6 +23,7 @@ pre-commit = ">=4.0.1,<5"
 matplotlib = ">=3.9.2,<4"
 aiofiles = ">=24.1.0,<25"
 seaborn = ">=0.13.2,<0.14"
+plotly = "*"
 
 [pypi-dependencies]
 yfinance = { version = ">=0.2.48, <0.3", extras = ["nospam", "repair"] }
@@ -31,3 +32,4 @@ audioop-lts = ">=0.2.1, <0.3"
 python-dotenv = ">=1.0.1, <2"
 podcastfy = ">=0.1.13, <0.2"
 playwright = ">=1.48.0, <2"
+kaleido = "*"
