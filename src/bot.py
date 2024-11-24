@@ -92,7 +92,7 @@ def get_user_info(df, username):
     """
     df["Money In Account"] = pd.to_numeric(df["Money In Account"], errors="coerce")
     user_row = df[df["Account Name"] == username]
-    if user_row.empty:
+    if (user_row.empty):
         return None
     user_data = user_row.iloc[0]
     user_name = user_data["Account Name"]
@@ -297,7 +297,8 @@ def generate_money_graph(username):
         values = data[username]
         all_values = values.copy()
         if spy_values is not None:
-            all_values.extend(spy_values.tolist())
+            # Convert spy_values to a list properly
+            all_values.extend(spy_values.values.tolist() if hasattr(spy_values, 'values') else spy_values.tolist())
         
         lowest_value = min(all_values)
         highest_value = max(all_values)
