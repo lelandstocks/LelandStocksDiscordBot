@@ -295,17 +295,17 @@ def generate_money_graph(username):
 
         # Calculate extreme values including S&P 500
         values = data[username]
-        all_values = values.copy()
+        all_values = [float(v) for v in values if v is not None]  # Convert values to float
+        
         if spy_values is not None:
             # Convert spy_values to numeric list safely
             if hasattr(spy_values, 'values'):
                 spy_list = spy_values.values.tolist()
             else:
                 spy_list = spy_values.tolist() if hasattr(spy_values, 'tolist') else list(spy_values)
+            # Convert spy values to float and filter None values
+            spy_list = [float(v) for v in spy_list if v is not None]
             all_values.extend(spy_list)
-        
-        # Convert all values to float
-        all_values = [float(x) for x in all_values if x is not None]
         
         if not all_values:
             return None, None, None
@@ -313,10 +313,12 @@ def generate_money_graph(username):
         lowest_value = min(all_values)
         highest_value = max(all_values)
 
+        # Update user's extreme points calculation
+        user_values = [float(v) for v in values if v is not None]
+        user_lowest = min(user_values)
+        user_highest = max(user_values)
+
         # Add markers for user's extreme points
-        user_lowest = min(values)
-        user_highest = max(values)
-        
         fig.add_trace(
             go.Scatter(
                 x=[data['timestamp'][values.index(user_lowest)]],
