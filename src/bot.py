@@ -227,47 +227,46 @@ def generate_money_graph(username):
         
         # Load user data first to determine date range
         data = {'timestamp': [], username: []}
+        first_value = None
         for file in files:
             try:
                 with open(file.path) as f:
                     file_data = json.load(f)
                 if username in file_data:
                     timestamp = parse_leaderboard_timestamp(file.name)
-                    # Add timezone info if missing
-                    if timestamp.tzinfo is None:
-                        timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
+                    timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
+                    value = float(file_data[username][0])
+                    if first_value is None:
+                        first_value = value
                     data['timestamp'].append(timestamp)
-                    data[username].append(float(file_data[username][0]))
+                    data[username].append(value)
             except Exception as e:
                 print(f"Error reading file {file.name}: {e}")
 
-        if not data['timestamp']:
+        if not data['timestamp'] or first_value is None:
             return None, None, None
 
-        # Get date range for S&P 500 data
+        # Fetch S&P 500 data for the same time period
         start_date = min(data['timestamp'])
         end_date = max(data['timestamp'])
-
-        # Fetch S&P 500 data
+        
         try:
             spy_data = fetch_stock_data("SPY", start_date, end_date)
             if not spy_data.empty:
-                # Normalize S&P data to match $100k starting investment
+                # Normalize S&P data to match user's starting value
                 initial_spy = spy_data['Close'].iloc[0]
-                spy_values = spy_data['Close'] * (100000 / initial_spy)
+                spy_values = spy_data['Close'] * (first_value / initial_spy)
                 
                 # Ensure timezone aware
                 if spy_data.index.tz is None:
                     spy_data.index = spy_data.index.tz_localize('UTC')
             else:
                 spy_values = None
-                spy_data = None
         except Exception as e:
             print(f"Error fetching S&P 500 data: {e}")
             spy_values = None
-            spy_data = None
 
-        # Create figure
+        # Create figure with adjusted range
         fig = go.Figure()
 
         # Add user's trace
@@ -275,7 +274,7 @@ def generate_money_graph(username):
             go.Scatter(
                 x=data['timestamp'],
                 y=data[username],
-                name=username,
+                name=f"{username}'s Portfolio",
                 line=dict(color='rgb(0, 100, 255)', width=2.5),
                 mode='lines+markers',
                 marker=dict(size=6)
@@ -283,56 +282,63 @@ def generate_money_graph(username):
         )
 
         # Add S&P 500 trace if available
-        if spy_values is not None and not spy_data.empty:
+        if spy_values is not None:
             fig.add_trace(
                 go.Scatter(
                     x=spy_data.index,
                     y=spy_values,
-                    name='S&P 500 ($100k invested)',
-                    line=dict(color='gray', dash='dash'),
-                    opacity=0.5
+                    name='S&P 500 (Normalized)',
+                    line=dict(color='rgb(255, 165, 0)', width=2, dash='dot'),
+                    mode='lines'
                 )
             )
 
-        # Calculate extreme values
+        # Calculate extreme values including S&P 500
         values = data[username]
-        lowest_value = min(values)
-        highest_value = max(values)
+        all_values = values.copy()
+        if spy_values is not None:
+            all_values.extend(spy_values.tolist())
+        
+        lowest_value = min(all_values)
+        highest_value = max(all_values)
 
-        # Add markers for extreme points
+        # Add markers for user's extreme points
+        user_lowest = min(values)
+        user_highest = max(values)
+        
         fig.add_trace(
             go.Scatter(
-                x=[data['timestamp'][values.index(lowest_value)]],
-                y=[lowest_value],
+                x=[data['timestamp'][values.index(user_lowest)]],
+                y=[user_lowest],
                 mode='markers+text',
-                name='Lowest',
+                name='Portfolio Lowest',
                 marker=dict(color='red', size=12),
-                text=[f'${lowest_value:,.2f}'],
+                text=[f'${user_lowest:,.2f}'],
                 textposition='top center'
             )
         )
 
         fig.add_trace(
             go.Scatter(
-                x=[data['timestamp'][values.index(highest_value)]],
-                y=[highest_value],
+                x=[data['timestamp'][values.index(user_highest)]],
+                y=[user_highest],
                 mode='markers+text',
-                name='Highest',
+                name='Portfolio Highest',
                 marker=dict(color='green', size=12),
-                text=[f'${highest_value:,.2f}'],
+                text=[f'${user_highest:,.2f}'],
                 textposition='top center'
             )
         )
 
-        # Update layout
+        # Update layout with adjusted range
         fig.update_layout(
             title=dict(
-                text=f"Account Value Over Time - {username}",
+                text=f"Portfolio Performance vs S&P 500 - {username}",
                 x=0.05,
                 font=dict(size=16)
             ),
             xaxis_title="Time",
-            yaxis_title="Account Value ($)",
+            yaxis_title="Value ($)",
             template="plotly_dark",
             plot_bgcolor='rgba(44, 47, 51, 1)',
             paper_bgcolor='rgba(44, 47, 51, 1)',
@@ -344,7 +350,10 @@ def generate_money_graph(username):
                 xanchor="left",
                 x=0.01
             ),
-            margin=dict(t=30, l=10, r=10, b=10)
+            margin=dict(t=30, l=10, r=10, b=10),
+            yaxis=dict(
+                range=[min(all_values) * 0.95, max(all_values) * 1.05]
+            )
         )
 
         # Format axes
