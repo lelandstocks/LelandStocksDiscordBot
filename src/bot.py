@@ -92,7 +92,7 @@ def get_user_info(df, username):
     """
     df["Money In Account"] = pd.to_numeric(df["Money In Account"], errors="coerce")
     user_row = df[df["Account Name"] == username]
-    if (user_row.empty):
+    if user_row.empty:
         return None
     user_data = user_row.iloc[0]
     user_name = user_data["Account Name"]
@@ -227,51 +227,47 @@ def generate_money_graph(username):
         
         # Load user data first to determine date range
         data = {'timestamp': [], username: []}
-        first_value = None
         for file in files:
             try:
                 with open(file.path) as f:
                     file_data = json.load(f)
                 if username in file_data:
                     timestamp = parse_leaderboard_timestamp(file.name)
-                    timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
-                    # Extract the account value, handling possible nested lists
-                    value_data = file_data[username][0]
-                    if isinstance(value_data, list):
-                        value = float(value_data[0])
-                    else:
-                        value = float(value_data)
-                    if first_value is None:
-                        first_value = value
+                    # Add timezone info if missing
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
                     data['timestamp'].append(timestamp)
-                    data[username].append(value)
+                    data[username].append(float(file_data[username][0]))
             except Exception as e:
                 print(f"Error reading file {file.name}: {e}")
 
-        if not data['timestamp'] or first_value is None:
+        if not data['timestamp']:
             return None, None, None
 
-        # Fetch S&P 500 data for the same time period
+        # Get date range for S&P 500 data
         start_date = min(data['timestamp'])
         end_date = max(data['timestamp'])
-        
+
+        # Fetch S&P 500 data
         try:
             spy_data = fetch_stock_data("SPY", start_date, end_date)
             if not spy_data.empty:
-                # Normalize S&P data to match user's starting value
+                # Normalize S&P data to match $100k starting investment
                 initial_spy = spy_data['Close'].iloc[0]
-                spy_values = spy_data['Close'] * (first_value / initial_spy)
+                spy_values = spy_data['Close'] * (100000 / initial_spy)
                 
                 # Ensure timezone aware
                 if spy_data.index.tz is None:
                     spy_data.index = spy_data.index.tz_localize('UTC')
             else:
                 spy_values = None
+                spy_data = None
         except Exception as e:
             print(f"Error fetching S&P 500 data: {e}")
             spy_values = None
+            spy_data = None
 
-        # Create figure with adjusted range
+        # Create figure
         fig = go.Figure()
 
         # Add user's trace
@@ -279,7 +275,7 @@ def generate_money_graph(username):
             go.Scatter(
                 x=data['timestamp'],
                 y=data[username],
-                name=f"{username}'s Portfolio",
+                name=username,
                 line=dict(color='rgb(0, 100, 255)', width=2.5),
                 mode='lines+markers',
                 marker=dict(size=6)
@@ -287,83 +283,56 @@ def generate_money_graph(username):
         )
 
         # Add S&P 500 trace if available
-        if spy_values is not None:
+        if spy_values is not None and not spy_data.empty:
             fig.add_trace(
                 go.Scatter(
                     x=spy_data.index,
                     y=spy_values,
-                    name='S&P 500 (Normalized)',
-                    line=dict(color='rgb(255, 165, 0)', width=2, dash='dot'),
-                    mode='lines'
+                    name='S&P 500 ($100k invested)',
+                    line=dict(color='gray', dash='dash'),
+                    opacity=0.5
                 )
             )
 
-        # Calculate extreme values including S&P 500
+        # Calculate extreme values
         values = data[username]
-        user_values = []
-        for v in values:
-            if v is not None:
-                if isinstance(v, list):
-                    v = v[0]
-                user_values.append(float(v))
+        lowest_value = min(values)
+        highest_value = max(values)
 
-        # Update user's extreme points calculation
-        user_lowest = min(user_values)
-        user_highest = max(user_values)
-
-        all_values = user_values.copy()
-
-        if spy_values is not None:
-            # Convert spy_values to a list of floats
-            spy_list = spy_values.tolist()
-            spy_values_list = []
-            for v in spy_list:
-                if v is not None:
-                    if isinstance(v, list):
-                        v = v[0]
-                    spy_values_list.append(float(v))
-            all_values.extend(spy_values_list)
-
-        if not all_values:
-            return None, None, None
-            
-        lowest_value = min(all_values)
-        highest_value = max(all_values)
-
-        # Add markers for user's extreme points
+        # Add markers for extreme points
         fig.add_trace(
             go.Scatter(
-                x=[data['timestamp'][values.index(user_lowest)]],
-                y=[user_lowest],
+                x=[data['timestamp'][values.index(lowest_value)]],
+                y=[lowest_value],
                 mode='markers+text',
-                name='Portfolio Lowest',
+                name='Lowest',
                 marker=dict(color='red', size=12),
-                text=[f'${user_lowest:,.2f}'],
+                text=[f'${lowest_value:,.2f}'],
                 textposition='top center'
             )
         )
 
         fig.add_trace(
             go.Scatter(
-                x=[data['timestamp'][values.index(user_highest)]],
-                y=[user_highest],
+                x=[data['timestamp'][values.index(highest_value)]],
+                y=[highest_value],
                 mode='markers+text',
-                name='Portfolio Highest',
+                name='Highest',
                 marker=dict(color='green', size=12),
-                text=[f'${user_highest:,.2f}'],
+                text=[f'${highest_value:,.2f}'],
                 textposition='top center'
             )
         )
 
-        # Update layout with adjusted range
+        # Update layout
         fig.update_layout(
             title=dict(
-                text=f"Portfolio Performance vs S&P 500 - {username}",
+                text=f"Account Value Over Time - {username}",
                 x=0.05,
                 font=dict(size=16)
             ),
             xaxis_title="Time",
-            yaxis_title="Value ($)",
+            yaxis_title="Account Value ($)",
             template="plotly_dark",
             plot_bgcolor='rgba(44, 47, 51, 1)',
             paper_bgcolor='rgba(44, 47, 51, 1)',
@@ -375,10 +344,7 @@ def generate_money_graph(username):
                 xanchor="left",
                 x=0.01
             ),
-            margin=dict(t=30, l=10, r=10, b=10),
-            yaxis=dict(
-                range=[min(all_values) * 0.95, max(all_values) * 1.05]
-            )
+            margin=dict(t=30, l=10, r=10, b=10)
         )
 
         # Format axes
@@ -416,10 +382,8 @@ class UserInfo(commands.Cog):
         Respond to the /userinfo command with the user's information.
         """
         try:
+            # Defer the response immediately
             await interaction.response.defer(thinking=True)
-        except discord.NotFound:
-            # If the interaction is no longer valid, just return
-            return
         except Exception as e:
             # If deferring fails, log the error and exit
             print(f"Failed to defer interaction: {e}")
@@ -489,15 +453,11 @@ class UserInfo(commands.Cog):
         """
         Provide autocomplete suggestions for usernames based on current input.
         """
-        try:
-            return [
-                app_commands.Choice(name=username, value=username)
-                for username in usernames_list
-                if current.lower() in username.lower()
-            ][:25]
-        except Exception as e:
-            print(f"Error in autocomplete: {e}")
-            return []
+        return [
+            app_commands.Choice(name=username, value=username)
+            for username in usernames_list
+            if current.lower() in username.lower()
+        ][:25]
 
 
 async def setup(bot):
@@ -525,8 +485,8 @@ def generate_leaderboard_graph(top_users_data):
     if not files:
         return None
 
-    # Convert DataFrame to list of usernames
-    usernames = top_users_data['Account Name'].values.tolist()
+    # Get top 10 usernames
+    usernames = top_users_data['Account Name'].tolist()
 
     # Create data structure for time series
     data = {
@@ -610,12 +570,7 @@ async def leaderboard(interaction: discord.Interaction):
     """
     Respond to the /leaderboard command with the top 10 users' info.
     """
-    try:
-        await interaction.response.defer(thinking=True)
-    except discord.NotFound:
-        # If the interaction is no longer valid, just return
-        return
-
+    await interaction.response.defer()
     try:
         # Load current data
         current_data = await load_leaderboard_data()
