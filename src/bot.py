@@ -224,7 +224,7 @@ def generate_money_graph(username):
         # Get all JSON files sorted by timestamp
         files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
                       key=lambda x: parse_leaderboard_timestamp(x.name))
-        
+
         # Load user data first to determine date range
         data = {'timestamp': [], username: []}
         for file in files:
@@ -255,7 +255,7 @@ def generate_money_graph(username):
                 # Normalize S&P data to match $100k starting investment
                 initial_spy = spy_data['Close'].iloc[0]
                 spy_values = spy_data['Close'] * (100000 / initial_spy)
-                
+
                 # Ensure timezone aware
                 if spy_data.index.tz is None:
                     spy_data.index = spy_data.index.tz_localize('UTC')
@@ -356,7 +356,7 @@ def generate_money_graph(username):
         buf = io.BytesIO()
         fig.write_image(buf, format='png', engine='kaleido')
         buf.seek(0)
-        
+
         return buf, lowest_value, highest_value
     except Exception as e:
         print(f"Error generating money graph: {e}")
@@ -560,7 +560,7 @@ def generate_leaderboard_graph(top_users_data):
     buf = io.BytesIO()
     fig.write_image(buf, format='png', engine='kaleido')
     buf.seek(0)
-    
+
     return buf
 
 # Update the leaderboard command to include the graph
@@ -627,7 +627,7 @@ def have_rankings_changed(previous_data, current_data):
         key=lambda x: x[1],
         reverse=True
     )[:5]
-    
+
     curr_rankings = sorted(
         [(name, float(data[0])) for name, data in current_data.items()],
         key=lambda x: x[1],
@@ -637,7 +637,7 @@ def have_rankings_changed(previous_data, current_data):
     # Compare just the usernames in their positions
     prev_names = [name for name, _ in prev_rankings]
     curr_names = [name for name, _ in curr_rankings]
-    
+
     return prev_names != curr_names
 
 @tasks.loop(minutes=1)
@@ -830,37 +830,6 @@ async def before_daily_summary():
     """Ensure bot is ready before starting the daily summary task"""
     await bot.wait_until_ready()
 
-
-@bot.event
-async def on_ready():
-    """
-    Actions to perform when the bot is fully ready.
-    """
-    print(f"Logged in as {bot.user}")
-    try:
-        # Get the leaderboard channel
-        leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
-        if leaderboard_channel:
-            # Do initial comparison with existing snapshot before starting regular tasks
-            await compare_stock_changes(leaderboard_channel)
-
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-
-        # Start all scheduled tasks
-        send_leaderboard.start()
-        start_of_day.start()
-        send_daily_summary.start()
-        print("Scheduled tasks started")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
-
-# Run the bot with the provided token from environment variables
-try:
-    bot.run(DISCORD_BOT_TOKEN)
-except Exception as e:
-    print(f"Error running the bot: {e}")
-
 async def create_morning_snapshot():
     """Create a snapshot of the leaderboard at market open"""
     try:
@@ -980,7 +949,7 @@ def have_rankings_changed(previous_data, current_data):
         key=lambda x: x[1],
         reverse=True
     )[:5]
-    
+
     curr_rankings = sorted(
         [(name, float(data[0])) for name, data in current_data.items()],
         key=lambda x: x[1],
@@ -990,5 +959,36 @@ def have_rankings_changed(previous_data, current_data):
     # Compare just the usernames in their positions
     prev_names = [name for name, _ in prev_rankings]
     curr_names = [name for name, _ in curr_rankings]
-    
+
     return prev_names != curr_names
+
+
+@bot.event
+async def on_ready():
+    """
+    Actions to perform when the bot is fully ready.
+    """
+    print(f"Logged in as {bot.user}")
+    try:
+        # Get the leaderboard channel
+        leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
+        if leaderboard_channel:
+            # Do initial comparison with existing snapshot before starting regular tasks
+            await compare_stock_changes(leaderboard_channel)
+
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+
+        # Start all scheduled tasks
+        send_leaderboard.start()
+        start_of_day.start()
+        send_daily_summary.start()
+        print("Scheduled tasks started")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+
+# Run the bot with the provided token from environment variables
+try:
+    bot.run(DISCORD_BOT_TOKEN)
+except Exception as e:
+    print(f"Error running the bot: {e}")
