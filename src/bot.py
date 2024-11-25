@@ -613,6 +613,33 @@ async def leaderboard(interaction: discord.Interaction):
         await interaction.followup.send(f"Error fetching leaderboard: {str(e)}")
 
 # Optimize leaderboard updates
+def have_rankings_changed(previous_data, current_data):
+    """
+    Compare previous and current data to check if rankings have changed.
+    Returns True only if the order of names has changed in top 5.
+    """
+    if not previous_data or not current_data:
+        return True
+
+    # Get sorted lists of just usernames (no amounts)
+    prev_rankings = sorted(
+        [(name, float(data[0])) for name, data in previous_data.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )[:5]
+    
+    curr_rankings = sorted(
+        [(name, float(data[0])) for name, data in current_data.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )[:5]
+
+    # Compare just the usernames in their positions
+    prev_names = [name for name, _ in prev_rankings]
+    curr_names = [name for name, _ in curr_rankings]
+    
+    return prev_names != curr_names
+
 @tasks.loop(minutes=1)
 async def send_leaderboard():
     """
