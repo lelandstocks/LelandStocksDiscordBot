@@ -645,29 +645,33 @@ async def send_leaderboard():
     """
     Send leaderboard updates only at market open/close or when rankings change.
     """
-    now = datetime.datetime.now(EST)
-    if now.weekday() >= 5:  # Skip weekends
-        return
-
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-
-    # Only proceed during market hours
-    if not (market_open <= now <= market_close):
-        return
-
     try:
+        now = datetime.datetime.now(EST)
+        print(f"Checking leaderboard update at {now}")  # Debug logging
+
+        if now.weekday() >= 5:  # Skip weekends
+            return
+
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        # Only proceed during market hours
+        if not (market_open <= now <= market_close):
+            return
+
         # Load current data using the async function
         current_data = await load_leaderboard_data()
         if not current_data:
+            print("No current leaderboard data available")  # Debug logging
             return
 
         # Load previous data from snapshot
-        snapshot_path = "./snapshots/leaderboard-snapshot.json"
+        snapshot_path = SNAPSHOT_PATH  # Use the constant defined at the top
         previous_data = None
         if os.path.exists(snapshot_path):
-            with open(snapshot_path, "r") as f:
-                previous_data = json.load(f)
+            async with aiofiles.open(snapshot_path, 'r') as f:
+                content = await f.read()
+                previous_data = json.loads(content)
 
         # Check if we should send an update
         is_market_open = abs((now - market_open).total_seconds()) < 60
@@ -675,6 +679,19 @@ async def send_leaderboard():
         rankings_changed = have_rankings_changed(previous_data, current_data)
 
         if is_market_open or is_market_close or rankings_changed:
+            print(f"Sending update - Market Open: {is_market_open}, Market Close: {is_market_close}, Rankings Changed: {rankings_changed}")  # Debug logging
+            
+            leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
+            if not leaderboard_channel:
+                print(f"Could not find leaderboard channel with ID {os.environ.get('DISCORD_CHANNEL_ID_Leaderboard')}")
+                return
+
+            # Check bot permissions
+            permissions = leaderboard_channel.permissions_for(leaderboard_channel.guild.me)
+            if not permissions.send_messages or not permissions.embed_links:
+                print("Bot doesn't have required permissions in the leaderboard channel")
+                return
+
             # Create DataFrame for displaying
             df = pd.DataFrame.from_dict(current_data, orient="index")
             df.reset_index(inplace=True)
@@ -682,7 +699,7 @@ async def send_leaderboard():
             df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
             # Format description
-            top_users = df.head(5)  # Changed from 10 to 5
+            top_users = df.head(5)
             description = ""
             for idx, row in enumerate(top_users.iterrows(), 1):
                 _, row = row
@@ -690,23 +707,20 @@ async def send_leaderboard():
                 description += f"**#{idx} - {row['Account Name']}**\n"
                 description += f"Money: ${money:,.2f}\n\n"
 
-            # Send update
-            leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
-            if leaderboard_channel:
-                embed = discord.Embed(
-                    colour=get_embed_color(),
-                    title="📊 Leaderboard Update!",
-                    description=description,
-                    timestamp=get_pst_time(),
-                )
+            embed = discord.Embed(
+                colour=get_embed_color(),
+                title="📊 Leaderboard Update!",
+                description=description,
+                timestamp=get_pst_time(),
+            )
 
-                # Add graph to the embed
-                graph_buffer = generate_leaderboard_graph(top_users)
-                if graph_buffer:
-                    file = discord.File(graph_buffer, filename="leaderboard_graph.png")
-                    embed.set_image(url="attachment://leaderboard_graph.png")
-
-                # Add reason for update
+            # Add graph to the embed
+            graph_buffer = generate_leaderboard_graph(top_users)
+            if graph_buffer:
+                file = discord.File(graph_buffer, filename="leaderboard_graph.png")
+                embed.set_image(url="attachment://leaderboard_graph.png")
+                
+                # Add update reason to footer
                 if is_market_open:
                     embed.set_footer(text="Market Open Update")
                 elif is_market_close:
@@ -714,15 +728,17 @@ async def send_leaderboard():
                 elif rankings_changed:
                     embed.set_footer(text="Rankings Changed")
 
-                await leaderboard_channel.send(embed=embed, file=file if graph_buffer else None)
+                await leaderboard_channel.send(embed=embed, file=file)
+                print(f"Successfully sent leaderboard update at {now}")  # Debug logging
 
             # Update snapshot after sending
-            with open(snapshot_path, "w") as f:
-                json.dump(current_data, f)
+            async with aiofiles.open(snapshot_path, 'w') as f:
+                await f.write(json.dumps(current_data))
 
     except Exception as e:
-        print(f"Error in send_leaderboard: {str(e)}")
-
+        print(f"Error in send_leaderboard task: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 @tasks.loop(time=datetime.time(hour=9, minute=30, tzinfo=EST))
 async def start_of_day():
@@ -970,22 +986,58 @@ async def on_ready():
     """
     print(f"Logged in as {bot.user}")
     try:
-        # Get the leaderboard channel
+        # Ensure snapshots directory exists
+        os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+        
+        # Send initial leaderboard
         leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
         if leaderboard_channel:
-            # Do initial comparison with existing snapshot before starting regular tasks
-            await compare_stock_changes(leaderboard_channel)
+            current_data = await load_leaderboard_data()
+            if current_data:
+                df = pd.DataFrame.from_dict(current_data, orient="index")
+                df.reset_index(inplace=True)
+                df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
+                df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
+                top_users = df.head(5)
+                description = ""
+                for idx, row in enumerate(top_users.iterrows(), 1):
+                    _, row = row
+                    money = float(row['Money In Account'])
+                    description += f"**#{idx} - {row['Account Name']}**\n"
+                    description += f"Money: ${money:,.2f}\n\n"
+
+                embed = discord.Embed(
+                    colour=get_embed_color(),
+                    title="📊 Initial Leaderboard",
+                    description=description,
+                    timestamp=get_pst_time(),
+                )
+                
+                graph_buffer = generate_leaderboard_graph(top_users)
+                if graph_buffer:
+                    file = discord.File(graph_buffer, filename="leaderboard_graph.png")
+                    embed.set_image(url="attachment://leaderboard_graph.png")
+                    await leaderboard_channel.send(embed=embed, file=file)
+                else:
+                    await leaderboard_channel.send(embed=embed)
+                
+                print("Sent initial leaderboard")
 
         # Start all scheduled tasks
         send_leaderboard.start()
         start_of_day.start()
         send_daily_summary.start()
         print("Scheduled tasks started")
+
+        # Sync commands
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+
     except Exception as e:
-        print(f"Failed to sync commands: {e}")
+        print(f"Error in on_ready: {e}")
+        import traceback
+        traceback.print_exc()
 
 # Run the bot with the provided token from environment variables
 try:
