@@ -8,10 +8,7 @@ import pandas as pd
 from pytz import timezone
 from dotenv import load_dotenv
 import io
-# Add yfinance import
 import yfinance as yf
-
-# Add caching for expensive operations
 from functools import lru_cache
 from typing import Optional, Tuple, Dict, Any
 from functools import wraps
@@ -20,21 +17,15 @@ from time import time
 # Load environment variables from .env file
 load_dotenv()
 
-# Add required import at the top with other imports
+#Import necessary libraries for asynchronous file operations and data visualization
 import aiofiles
-from typing import Optional, Tuple, Dict, Any
-
-# Remove matplotlib import and add plotly imports
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
-# Add this function near the top with other utility functions
+
+# Asynchronous function to load leaderboard data from the latest JSON file.  Handles file not found and other exceptions.
 async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
-    """
-    Asynchronously load the latest leaderboard data.
-    Returns None if the file doesn't exist or there's an error.
-    """
     try:
         if not os.path.exists(LEADERBOARD_LATEST):
             return None
@@ -50,46 +41,40 @@ async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
         print(f"Error loading leaderboard data: {e}")
         return None
 
-# Set up paths
+# Define file paths using environment variables for flexibility and maintainability.
 PATH_TO_LEADERBOARD_DATA = os.environ.get('PATH_TO_LEADERBOARD_DATA')
 LEADERBOARDS_DIR = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/leaderboards')
 IN_TIME_DIR = os.path.join(LEADERBOARDS_DIR, 'in_time')
 LEADERBOARD_LATEST = os.path.join(LEADERBOARDS_DIR, 'leaderboard-latest.json')
 USERNAMES_PATH = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/portfolios/usernames.txt')
-
-# Update snapshot paths to be local
 SNAPSHOTS_DIR = "./snapshots"
 SNAPSHOT_PATH = os.path.join(SNAPSHOTS_DIR, "leaderboard-snapshot.json")
 MORNING_SNAPSHOT_PATH = os.path.join(SNAPSHOTS_DIR, "morning-snapshot.json")
 
-# Ensure snapshots directory exists
+# Create snapshots directory if it doesn't exist.
 os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 
-# Set up Discord bot intents
+# Set up Discord bot intents.  We need message content and guilds for this bot.
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 
-# Ensure the bot token is loaded correctly
+# Get the Discord bot token from environment variables.  Exit if not found.
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 if not DISCORD_BOT_TOKEN:
     print("Error: DISCORD_BOT_TOKEN is not set in the environment variables.")
     exit(1)
 
-# Initialize bot instance with command prefix
+# Initialize the Discord bot with command prefix '$' and intents.
 bot = commands.Bot(command_prefix="$", intents=intents)
-
-# Add debug print to check bot initialization
 print("Bot initialized with command prefix '$'")
 
-# Add timezone constants near the top of the file with other constants
+# Define time zones for Eastern and Pacific Standard Time.
 EST = timezone('US/Eastern')
 PST = timezone('America/Los_Angeles')
 
+# Function to extract and format user information from a Pandas DataFrame.
 def get_user_info(df, username):
-    """
-    Retrieve and format information for a specific user from the DataFrame.
-    """
     df["Money In Account"] = pd.to_numeric(df["Money In Account"], errors="coerce")
     user_row = df[df["Account Name"] == username]
     if user_row.empty:
@@ -103,11 +88,8 @@ def get_user_info(df, username):
     )
     return user_name, user_money, formatted_holdings
 
-
+# Function to get the path to the latest leaderboard file in the 'in_time' directory.
 def get_latest_in_time_leaderboard():
-    """
-    Get the most recent leaderboard file from the in_time directory.
-    """
     files = [f for f in os.listdir(IN_TIME_DIR) if f.endswith(".json")]
     if not files:
         return None
@@ -115,37 +97,28 @@ def get_latest_in_time_leaderboard():
     latest_file = files[-1]
     return os.path.join(IN_TIME_DIR, latest_file)
 
-
+# Helper function to get the current time in PST.
 def get_pst_time():
-    """Helper function to get current time in PST"""
     return datetime.datetime.now(PST)
 
-
+# Asynchronous function to compare stock holdings between the current and previous leaderboards and send updates to Discord.
 async def compare_stock_changes(channel):
-    """
-    Compare current leaderboard with snapshot to detect stock changes, and send updates to the Discord channel as embeds.
-    """
     try:
-        # Load the current leaderboard data first
         with open(LEADERBOARD_LATEST, "r") as f:
             current_data = json.load(f)
 
-        # Load the snapshot file if it exists
         snapshot_path = SNAPSHOT_PATH
         if os.path.exists(snapshot_path):
             with open(snapshot_path, "r") as f:
                 previous_data = json.load(f)
 
-            # Compare holdings for each user
             for username in current_data:
                 if username not in previous_data:
                     continue
 
-                # Get current and previous stock symbols
                 current_stocks = set(stock[0] for stock in current_data[username][2])
                 previous_stocks = set(stock[0] for stock in previous_data[username][2])
 
-                # Find new and removed stocks
                 new_stocks = current_stocks - previous_stocks
                 removed_stocks = previous_stocks - current_stocks
 
@@ -166,7 +139,6 @@ async def compare_stock_changes(channel):
                     if stock_channel:
                         await stock_channel.send(embed=embed)
 
-        # Update the snapshot with current data after comparison
         with open(snapshot_path, "w") as f:
             json.dump(current_data, f)
 
@@ -175,23 +147,16 @@ async def compare_stock_changes(channel):
         import traceback
         traceback.print_exc()
 
-
-# Load usernames from file
+# Load usernames from the usernames file.
 with open(USERNAMES_PATH, "r") as f:
     usernames_list = [line.strip() for line in f.readlines()]
 
-
+# Function to parse the timestamp from a leaderboard filename.
 def parse_leaderboard_timestamp(filename):
-    """
-    Parse the datetime from a leaderboard filename.
-
-    Filename format: leaderboard-YYYY-MM-DD-HH_MM.json
-    """
     timestamp_str = filename[len('leaderboard-'):-len('.json')]
     return datetime.datetime.strptime(timestamp_str, '%Y-%m-%d-%H_%M')
 
-
-# Replace the lru_cache implementation with a time-based cache
+#Custom cache class to store and retrieve data with a time-to-live (TTL).  This improves performance by caching expensive operations.
 class TimedCache:
     def __init__(self, ttl=3600):
         self.cache = {}
@@ -212,20 +177,17 @@ class TimedCache:
             return result
         return wrapped
 
-# Replace the lru_cache decorator with our custom one
+#Use the TimedCache to wrap the fetch_stock_data function, caching results for an hour.
 @TimedCache(ttl=3600)
 def fetch_stock_data(symbol: str, start_date, end_date):
     return yf.download(symbol, start=start_date, end=end_date, progress=False)
 
-# Optimize the generate_money_graph function
+# Function to generate a Plotly graph showing a user's account value over time, along with the S&P 500 for comparison.
 def generate_money_graph(username):
-    """Generate a time series graph for a user's account value"""
     try:
-        # Get all JSON files sorted by timestamp
         files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
                       key=lambda x: parse_leaderboard_timestamp(x.name))
 
-        # Load user data first to determine date range
         data = {'timestamp': [], username: []}
         for file in files:
             try:
@@ -233,7 +195,6 @@ def generate_money_graph(username):
                     file_data = json.load(f)
                 if username in file_data:
                     timestamp = parse_leaderboard_timestamp(file.name)
-                    # Add timezone info if missing
                     if timestamp.tzinfo is None:
                         timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
                     data['timestamp'].append(timestamp)
@@ -244,19 +205,15 @@ def generate_money_graph(username):
         if not data['timestamp']:
             return None, None, None
 
-        # Get date range for S&P 500 data
         start_date = min(data['timestamp'])
         end_date = max(data['timestamp'])
 
-        # Fetch S&P 500 data
         try:
             spy_data = fetch_stock_data("SPY", start_date, end_date)
             if not spy_data.empty:
-                # Normalize S&P data to match $100k starting investment
                 initial_spy = spy_data['Close'].iloc[0]
                 spy_values = spy_data['Close'] * (100000 / initial_spy)
 
-                # Ensure timezone aware
                 if spy_data.index.tz is None:
                     spy_data.index = spy_data.index.tz_localize('UTC')
             else:
@@ -267,10 +224,8 @@ def generate_money_graph(username):
             spy_values = None
             spy_data = None
 
-        # Create figure
         fig = go.Figure()
 
-        # Add user's trace
         fig.add_trace(
             go.Scatter(
                 x=data['timestamp'],
@@ -282,7 +237,6 @@ def generate_money_graph(username):
             )
         )
 
-        # Add S&P 500 trace if available
         if spy_values is not None and not spy_data.empty:
             fig.add_trace(
                 go.Scatter(
@@ -294,12 +248,10 @@ def generate_money_graph(username):
                 )
             )
 
-        # Calculate extreme values
         values = data[username]
         lowest_value = min(values)
         highest_value = max(values)
 
-        # Add markers for extreme points
         fig.add_trace(
             go.Scatter(
                 x=[data['timestamp'][values.index(lowest_value)]],
@@ -324,7 +276,6 @@ def generate_money_graph(username):
             )
         )
 
-        # Update layout
         fig.update_layout(
             title=dict(
                 text=f"Account Value Over Time - {username}",
@@ -347,12 +298,10 @@ def generate_money_graph(username):
             margin=dict(t=30, l=10, r=10, b=10)
         )
 
-        # Format axes
         fig.update_yaxes(tickprefix="$", tickformat=",.0f")
         fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
         fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
 
-        # Save to buffer
         buf = io.BytesIO()
         fig.write_image(buf, format='png', engine='kaleido')
         buf.seek(0)
@@ -362,29 +311,23 @@ def generate_money_graph(username):
         print(f"Error generating money graph: {e}")
         return None, None, None
 
+# Function to determine the embed color based on a testing flag.
 def get_embed_color():
-    """Get the appropriate embed color based on testing mode"""
     testing = os.environ.get('TESTING', 'false').lower() == 'true'
-    return 0xFF69B4 if testing else 0x0000FF  # Using hex values directly: hot pink (#FF69B4) and blue (#0000FF)
+    return 0xFF69B4 if testing else 0x0000FF
 
+#Cog to handle user information related commands.
 class UserInfo(commands.Cog):
-    """
-    Cog to handle user information related commands.
-    """
     def __init__(self, bot):
         self.bot = bot
 
+    #Slash command to get user information.  Uses autocompletion for usernames.
     @app_commands.command(name="userinfo", description="Get user information")
     @app_commands.describe(username="Select a username")
     async def userinfo(self, interaction: discord.Interaction, username: str):
-        """
-        Respond to the /userinfo command with the user's information.
-        """
         try:
-            # Defer the response immediately
             await interaction.response.defer(thinking=True)
         except Exception as e:
-            # If deferring fails, log the error and exit
             print(f"Failed to defer interaction: {e}")
             return
 
@@ -416,7 +359,6 @@ class UserInfo(commands.Cog):
                 timestamp=get_pst_time(),
             )
 
-            # Generate and add the graph
             try:
                 graph_buffer, lowest_value, highest_value = generate_money_graph(username)
                 if graph_buffer:
@@ -438,62 +380,49 @@ class UserInfo(commands.Cog):
                     await interaction.followup.send(embed=embed)
             except Exception as graph_error:
                 print(f"Error generating graph: {graph_error}")
-                # If graph fails, still send the basic embed
                 await interaction.followup.send(embed=embed)
 
         except Exception as e:
             print(f"Error in userinfo command: {e}")
             await interaction.followup.send(f"Error fetching user info: {str(e)}")
 
+    #Autocomplete function for the username parameter of the /userinfo command.
     @userinfo.autocomplete("username")
     async def username_autocomplete(
         self, interaction: discord.Interaction, current: str
     ):
-        """
-        Provide autocomplete suggestions for usernames based on current input.
-        """
         return [
             app_commands.Choice(name=username, value=username)
             for username in usernames_list
             if current.lower() in username.lower()
         ][:25]
 
-
+# Function to add the UserInfo cog to the bot.
 async def setup(bot):
-    """
-    Add the UserInfo cog to the bot.
-    """
     await bot.add_cog(UserInfo(bot))
 
-
+# Function to run setup when the bot is ready.
 async def setup_hook():
-    """
-    Run setup when the bot is ready.
-    """
     await setup(bot)
     print("Setup hook executed")
 
 bot.setup_hook = setup_hook
 
+# Function to generate a Plotly graph showing the top 10 users' performance over time.
 def generate_leaderboard_graph(top_users_data):
-    """Generate a line chart showing the top 10 users' performance over time"""
-    # Get all JSON files sorted by timestamp
     files = sorted([f for f in os.scandir(IN_TIME_DIR) if f.name.endswith('.json')],
                   key=lambda x: parse_leaderboard_timestamp(x.name))
 
     if not files:
         return None
 
-    # Get top 10 usernames
     usernames = top_users_data['Account Name'].tolist()
 
-    # Create data structure for time series
     data = {
         'timestamp': [],
         **{username: [] for username in usernames}
     }
 
-    # Read data for each timestamp
     for file in files:
         try:
             with open(file.path) as f:
@@ -511,11 +440,9 @@ def generate_leaderboard_graph(top_users_data):
     if not data['timestamp']:
         return None
 
-    # Create figure
     fig = go.Figure()
 
-    # Add trace for each user
-    colors = px.colors.qualitative.Set3  # Using a color sequence
+    colors = px.colors.qualitative.Set3
     for i, username in enumerate(usernames):
         fig.add_trace(
             go.Scatter(
@@ -528,7 +455,6 @@ def generate_leaderboard_graph(top_users_data):
             )
         )
 
-    # Update layout
     fig.update_layout(
         title=dict(
             text="Top 10 Users Performance Over Time",
@@ -551,40 +477,32 @@ def generate_leaderboard_graph(top_users_data):
         margin=dict(t=30, l=10, r=10, b=10)
     )
 
-    # Format axes
     fig.update_yaxes(tickprefix="$", tickformat=",.0f")
     fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
 
-    # Save to buffer
     buf = io.BytesIO()
     fig.write_image(buf, format='png', engine='kaleido')
     buf.seek(0)
 
     return buf
 
-# Update the leaderboard command to include the graph
+#Slash command to display the current leaderboard. Includes a graph of top 5 users' performance.
 @bot.tree.command(name="leaderboard", description="Get current leaderboard")
 async def leaderboard(interaction: discord.Interaction):
-    """
-    Respond to the /leaderboard command with the top 10 users' info.
-    """
     await interaction.response.defer()
     try:
-        # Load current data
         current_data = await load_leaderboard_data()
         if not current_data:
             await interaction.followup.send("Error loading leaderboard data")
             return
 
-        # Create DataFrame for displaying
         df = pd.DataFrame.from_dict(current_data, orient="index")
         df.reset_index(inplace=True)
         df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
         df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
-        # Format description
-        top_users = df.head(5)  # Changed from 10 to 5
+        top_users = df.head(5)
         description = ""
         for idx, row in enumerate(top_users.iterrows(), 1):
             _, row = row
@@ -599,7 +517,6 @@ async def leaderboard(interaction: discord.Interaction):
             timestamp=get_pst_time(),
         )
 
-        # After creating the embed, add the graph
         graph_buffer = generate_leaderboard_graph(top_users)
         if graph_buffer:
             file = discord.File(graph_buffer, filename="leaderboard_graph.png")
@@ -612,16 +529,11 @@ async def leaderboard(interaction: discord.Interaction):
         print(f"Error in leaderboard command: {str(e)}")
         await interaction.followup.send(f"Error fetching leaderboard: {str(e)}")
 
-# Optimize leaderboard updates
+#Function to compare previous and current leaderboard data to determine if the top 5 rankings have changed.
 def have_rankings_changed(previous_data, current_data):
-    """
-    Compare previous and current data to check if rankings have changed.
-    Returns True only if the order of names has changed in top 5.
-    """
     if not previous_data or not current_data:
         return True
 
-    # Get sorted lists of just usernames (no amounts)
     prev_rankings = sorted(
         [(name, float(data[0])) for name, data in previous_data.items()],
         key=lambda x: x[1],
@@ -634,71 +546,54 @@ def have_rankings_changed(previous_data, current_data):
         reverse=True
     )[:5]
 
-    # Compare just the usernames in their positions
     prev_names = [name for name, _ in prev_rankings]
     curr_names = [name for name, _ in curr_rankings]
 
     return prev_names != curr_names
 
+#Background task to send leaderboard updates every minute.  Checks for market open/close and ranking changes.
 @tasks.loop(minutes=1)
 async def send_leaderboard():
-    """
-    Send leaderboard updates only at market open/close or when rankings change.
-    """
     try:
         now = datetime.datetime.now(EST)
-        print(f"Checking leaderboard update at {now}")  # Debug logging
-
-        if now.weekday() >= 5:  # Skip weekends
+        if now.weekday() >= 5:
             return
 
         market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
         market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
 
-        # Only proceed during market hours
         if not (market_open <= now <= market_close):
             return
 
-        # Load current data using the async function
         current_data = await load_leaderboard_data()
         if not current_data:
-            print("No current leaderboard data available")  # Debug logging
             return
 
-        # Load previous data from snapshot
-        snapshot_path = SNAPSHOT_PATH  # Use the constant defined at the top
+        snapshot_path = SNAPSHOT_PATH
         previous_data = None
         if os.path.exists(snapshot_path):
             async with aiofiles.open(snapshot_path, 'r') as f:
                 content = await f.read()
                 previous_data = json.loads(content)
 
-        # Check if we should send an update
         is_market_open = abs((now - market_open).total_seconds()) < 60
         is_market_close = abs((now - market_close).total_seconds()) < 60
         rankings_changed = have_rankings_changed(previous_data, current_data)
 
         if is_market_open or is_market_close or rankings_changed:
-            print(f"Sending update - Market Open: {is_market_open}, Market Close: {is_market_close}, Rankings Changed: {rankings_changed}")  # Debug logging
-            
             leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
             if not leaderboard_channel:
-                print(f"Could not find leaderboard channel with ID {os.environ.get('DISCORD_CHANNEL_ID_Leaderboard')}")
                 return
 
-            # Check bot permissions
             permissions = leaderboard_channel.permissions_for(leaderboard_channel.guild.me)
             if not permissions.send_messages or not permissions.embed_links:
-                print("Bot doesn't have required permissions in the leaderboard channel")
                 return
 
-            # Create DataFrame for displaying
             df = pd.DataFrame.from_dict(current_data, orient="index")
             df.reset_index(inplace=True)
             df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
             df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
-            # Format description
             top_users = df.head(5)
             description = ""
             for idx, row in enumerate(top_users.iterrows(), 1):
@@ -714,13 +609,11 @@ async def send_leaderboard():
                 timestamp=get_pst_time(),
             )
 
-            # Add graph to the embed
             graph_buffer = generate_leaderboard_graph(top_users)
             if graph_buffer:
                 file = discord.File(graph_buffer, filename="leaderboard_graph.png")
                 embed.set_image(url="attachment://leaderboard_graph.png")
                 
-                # Add update reason to footer
                 if is_market_open:
                     embed.set_footer(text="Market Open Update")
                 elif is_market_close:
@@ -729,9 +622,7 @@ async def send_leaderboard():
                     embed.set_footer(text="Rankings Changed")
 
                 await leaderboard_channel.send(embed=embed, file=file)
-                print(f"Successfully sent leaderboard update at {now}")  # Debug logging
 
-            # Update snapshot after sending
             async with aiofiles.open(snapshot_path, 'w') as f:
                 await f.write(json.dumps(current_data))
 
@@ -740,52 +631,45 @@ async def send_leaderboard():
         import traceback
         traceback.print_exc()
 
+#Background task to create a snapshot of the leaderboard at the start of each trading day (9:30 AM EST).
 @tasks.loop(time=datetime.time(hour=9, minute=30, tzinfo=EST))
 async def start_of_day():
-    """Create snapshot at market open"""
     now = datetime.datetime.now(EST)
-    if now.weekday() < 5:  # Only on weekdays
+    if now.weekday() < 5:
         await create_morning_snapshot()
 
-
+#Background task to send a daily summary at the end of the trading day (4:00 PM EST).  Compares the morning snapshot to the end-of-day data.
 @tasks.loop(time=datetime.time(hour=16, minute=0, tzinfo=EST))
 async def send_daily_summary():
-    """Send daily summary comparing start of day to end of day"""
     now = datetime.datetime.now(EST)
-    if now.weekday() < 5:  # Only on weekdays
+    if now.weekday() < 5:
         try:
-            # Load morning snapshot instead of previous day's snapshot
             morning_snapshot_path = MORNING_SNAPSHOT_PATH
             if not os.path.exists(morning_snapshot_path):
-                print("No morning snapshot found")
                 return
 
             with open(morning_snapshot_path, "r") as f:
                 morning_data = json.load(f)
 
-            # Load end of day data
-            with open(LEADERBOARDS_DIR, "r") as f:
+            with open(LEADERBOARD_LATEST, "r") as f:
                 current_data = json.load(f)
 
-            # Calculate performance using morning data
             stats = calculate_daily_performance(morning_data, current_data)
 
             if stats["performance"]:
                 embed = discord.Embed(
-                    colour=get_embed_color(),  # Changed this line
+                    colour=get_embed_color(),
                     title="📊 End of Day Trading Summary",
                     description=f"Market Close Summary for {now.strftime('%A, %B %d, %Y')}",
                     timestamp=get_pst_time(),
                 )
 
-                # Overall stats
                 embed.add_field(
                     name="📈 Market Activity",
                     value=f"Total Trades Today: {stats['total_trades']}\n",
                     inline=False,
                 )
 
-                # Top performers
                 top_text = "\n".join(
                     [
                         f"**{p['username']}**: {p['change_percent']:+.2f}% (${p['change_amount']:,.2f}) - {p['trades']} trades"
@@ -794,7 +678,6 @@ async def send_daily_summary():
                 )
                 embed.add_field(name="🏆 Top Performers", value=top_text, inline=False)
 
-                # Bottom performers
                 bottom_text = "\n".join(
                     [
                         f"**{p['username']}**: {p['change_percent']:+.2f}% (${p['change_amount']:,.2f}) - {p['trades']} trades"
@@ -805,7 +688,6 @@ async def send_daily_summary():
                     name="📉 Needs Improvement", value=bottom_text, inline=False
                 )
 
-                # Biggest moves
                 if stats["biggest_gain"]["username"]:
                     embed.add_field(
                         name="🚀 Biggest Gain",
@@ -820,7 +702,6 @@ async def send_daily_summary():
                         inline=True,
                     )
 
-                # Most active traders
                 active_text = "\n".join(
                     [
                         f"**{p['username']}**: {p['trades']} trades"
@@ -840,32 +721,25 @@ async def send_daily_summary():
         except Exception as e:
             print(f"Error in send_daily_summary: {str(e)}")
 
-
+#Before loop function for the send_daily_summary task to ensure the bot is ready before starting the task.
 @send_daily_summary.before_loop
 async def before_daily_summary():
-    """Ensure bot is ready before starting the daily summary task"""
     await bot.wait_until_ready()
 
+#Asynchronous function to create a snapshot of the leaderboard data at the beginning of the day.
 async def create_morning_snapshot():
-    """Create a snapshot of the leaderboard at market open"""
     try:
-        # Load current leaderboard data
         with open(LEADERBOARD_LATEST, "r") as f:
             data = json.load(f)
 
-        # Save as morning snapshot
         with open(MORNING_SNAPSHOT_PATH, "w") as f:
             json.dump(data, f)
 
-        print("Created morning snapshot")
     except Exception as e:
         print(f"Error creating morning snapshot: {e}")
 
+#Function to calculate various daily performance metrics (top/bottom performers, biggest gain/loss, most active traders).
 def calculate_daily_performance(morning_data, current_data):
-    """
-    Calculate performance metrics comparing morning to current data.
-    Returns dict with various performance statistics.
-    """
     stats = {
         "performance": [],
         "most_active": [],
@@ -874,26 +748,21 @@ def calculate_daily_performance(morning_data, current_data):
         "total_trades": 0
     }
 
-    # Calculate metrics for each user
     for username in current_data:
         if username not in morning_data:
             continue
 
-        # Get morning and current values
         morning_value = float(morning_data[username][0])
         current_value = float(current_data[username][0])
 
-        # Calculate changes
         change_amount = current_value - morning_value
         change_percent = (change_amount / morning_value) * 100 if morning_value != 0 else 0
 
-        # Count trades by comparing stock holdings
         morning_stocks = set(stock[0] for stock in morning_data[username][2])
         current_stocks = set(stock[0] for stock in current_data[username][2])
         trades = len(morning_stocks.symmetric_difference(current_stocks))
         stats["total_trades"] += trades
 
-        # Add to performance list
         stats["performance"].append({
             "username": username,
             "change_amount": change_amount,
@@ -901,7 +770,6 @@ def calculate_daily_performance(morning_data, current_data):
             "trades": trades
         })
 
-        # Update biggest gain/loss
         if change_percent > stats["biggest_gain"]["percent"]:
             stats["biggest_gain"] = {
                 "username": username,
@@ -915,31 +783,27 @@ def calculate_daily_performance(morning_data, current_data):
                 "percent": change_percent
             }
 
-        # Track active traders
         if trades > 0:
             stats["most_active"].append({
                 "username": username,
                 "trades": trades
             })
 
-    # Sort results
     stats["performance"].sort(key=lambda x: x["change_percent"], reverse=True)
     stats["most_active"].sort(key=lambda x: x["trades"], reverse=True)
-    stats["most_active"] = stats["most_active"][:3]  # Keep top 3 most active
+    stats["most_active"] = stats["most_active"][:3]
 
     return stats
 
-# Async file operations
-import aiofiles  # Add this import
+#Import aiofiles library for asynchronous file I/O operations.
+import aiofiles
 
-# Move this function earlier in the file, before it's used
+#Function to load leaderboard data asynchronously, handling potential errors.
 async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
     try:
-        # Handle case where file doesn't exist
         if not os.path.exists(LEADERBOARD_LATEST):
             return None
 
-        # Use regular open if aiofiles fails
         try:
             async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
                 content = await f.read()
@@ -951,15 +815,12 @@ async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
         print(f"Error loading leaderboard data: {e}")
         return None
 
+
+#Function to check if the top 5 rankings have changed between two leaderboard datasets.
 def have_rankings_changed(previous_data, current_data):
-    """
-    Compare previous and current data to check if rankings have changed.
-    Returns True only if the order of names has changed in top 5.
-    """
     if not previous_data or not current_data:
         return True
 
-    # Get sorted lists of just usernames (no amounts)
     prev_rankings = sorted(
         [(name, float(data[0])) for name, data in previous_data.items()],
         key=lambda x: x[1],
@@ -972,24 +833,17 @@ def have_rankings_changed(previous_data, current_data):
         reverse=True
     )[:5]
 
-    # Compare just the usernames in their positions
     prev_names = [name for name, _ in prev_rankings]
     curr_names = [name for name, _ in curr_rankings]
 
     return prev_names != curr_names
 
-
+#Event handler for when the bot is ready.  Starts background tasks and syncs slash commands.  Handles potential errors during startup.
 @bot.event
 async def on_ready():
-    """
-    Actions to perform when the bot is fully ready.
-    """
-    print(f"Logged in as {bot.user}")
     try:
-        # Ensure snapshots directory exists
         os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
         
-        # Send initial leaderboard
         leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
         if leaderboard_channel:
             current_data = await load_leaderboard_data()
@@ -1022,15 +876,10 @@ async def on_ready():
                 else:
                     await leaderboard_channel.send(embed=embed)
                 
-                print("Sent initial leaderboard")
-
-        # Start all scheduled tasks
         send_leaderboard.start()
         start_of_day.start()
         send_daily_summary.start()
-        print("Scheduled tasks started")
 
-        # Sync commands
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
 
@@ -1039,7 +888,7 @@ async def on_ready():
         import traceback
         traceback.print_exc()
 
-# Run the bot with the provided token from environment variables
+#Run the bot.  Handles potential errors during bot execution.
 try:
     bot.run(DISCORD_BOT_TOKEN)
 except Exception as e:
