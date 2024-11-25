@@ -371,7 +371,6 @@ class UserInfo(commands.Cog):
     """
     Cog to handle user information related commands.
     """
-
     def __init__(self, bot):
         self.bot = bot
 
