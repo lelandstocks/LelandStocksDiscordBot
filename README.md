@@ -15,6 +15,10 @@ Leland Stocks Discord Bot is a powerful and user-friendly Discord bot designed t
 - **🛠 Automated Updates**: The bot fetches the latest leaderboard and stock data automatically.
 
 ---
+## Images
+
+- **📊 User Information**:
+![image](https://github.com/user-attachments/assets/ddd9ad19-857a-431b-b5b4-866cddc92914)
 
 ## 🛠️ Setup Instructions
 
