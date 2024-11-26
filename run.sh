@@ -24,6 +24,9 @@ stop_bot() {
     fi
 }
 
+# Ensure the bot process is killed when the script exits
+trap 'stop_bot; exit' SIGINT SIGTERM
+
 # Only fetch updates without merging
 update_repositories() {
     log "🔍 Checking for updates..."
@@ -95,6 +98,25 @@ force_merge_repositories() {
     log "✅ Merge complete"
 }
 
+# Function to run bot with proper cleanup
+run_bot() {
+    local exit_code=0
+    pixi run update_discord &
+    BOT_PID=$!
+    log "✨ Bot started with PID: $BOT_PID"
+    
+    # Wait for bot to finish or be killed
+    wait $BOT_PID
+    exit_code=$?
+    
+    # Ensure process and any children are stopped
+    pkill -P $BOT_PID 2>/dev/null
+    kill -9 $BOT_PID 2>/dev/null
+    
+    BOT_PID=""
+    return $exit_code
+}
+
 # Main loop
 while true; do
     if ! kill -0 $BOT_PID 2>/dev/null; then
@@ -107,9 +129,7 @@ while true; do
         fi
 
         log "🚀 Starting bot..."
-        pixi run update_discord &
-        BOT_PID=$!
-        log "✨ Bot started with PID: $BOT_PID"
+        run_bot
     else
         if update_repositories && check_changes; then
             stop_bot
@@ -117,9 +137,7 @@ while true; do
             force_merge_repositories
             
             log "🚀 Starting bot..."
-            pixi run update_discord &
-            BOT_PID=$!
-            log "✨ Bot started with PID: $BOT_PID"
+            run_bot
         fi
     fi
 
