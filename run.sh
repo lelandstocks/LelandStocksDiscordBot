@@ -28,6 +28,9 @@ stop_bot() {
     fi
 }
 
+# Ensure the bot process is killed when the script exits
+trap 'stop_bot; exit' SIGINT SIGTERM
+
 # Only fetch updates without merging
 update_repositories() {
     log "🔍 Checking for updates..."
