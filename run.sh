@@ -109,41 +109,43 @@ force_merge_repositories() {
 
 # Main loop
 while true; do
-    if ! kill -0 $BOT_PID 2>/dev/null; then
-        log "🤖 Bot not running, initiating startup sequence..."
-        if update_repositories; then
-            if check_changes; then
-                log "🔄 Changes detected, preparing restart..."
-                force_merge_repositories
-            else
-                log "✅ No updates detected"
-            fi
-
-            log "🚀 Starting bot..."
-            if command -v pixi &> /dev/null; then
-                pixi run update_discord &
-                BOT_PID=$!
-                log "✨ Bot started with PID: $BOT_PID"
-            else
-                log "❌ 'pixi' command not found, unable to start bot"
-            fi
-        fi
-    else
-        if update_repositories && check_changes; then
-            stop_bot
-            log "🔄 Changes detected, preparing restart..."
-            force_merge_repositories
-            
-            log "🚀 Starting bot..."
-            if command -v pixi &> /dev/null; then
-                pixi run update_discord &
-                BOT_PID=$!
-                log "✨ Bot started with PID: $BOT_PID"
-            else
-                log "❌ 'pixi' command not found, unable to start bot"
-            fi
+    # Check for updates regardless of bot state
+    update_status=0
+    if update_repositories; then
+        if check_changes; then
+            update_status=1
+            log "🔄 Updates detected"
         else
             log "✅ No updates detected"
+        fi
+    fi
+
+    if ! kill -0 $BOT_PID 2>/dev/null; then
+        log "🤖 Bot not running, initiating startup sequence..."
+        if [ $update_status -eq 1 ]; then
+            force_merge_repositories
+        fi
+        
+        log "🚀 Starting bot..."
+        if command -v pixi &> /dev/null; then
+            pixi run update_discord &
+            BOT_PID=$!
+            log "✨ Bot started with PID: $BOT_PID"
+        else
+            log "❌ 'pixi' command not found, unable to start bot"
+        fi
+    elif [ $update_status -eq 1 ]; then
+        stop_bot
+        log "🔄 Changes detected, preparing restart..."
+        force_merge_repositories
+        
+        log "🚀 Starting bot..."
+        if command -v pixi &> /dev/null; then
+            pixi run update_discord &
+            BOT_PID=$!
+            log "✨ Bot started with PID: $BOT_PID"
+        else
+            log "❌ 'pixi' command not found, unable to start bot"
         fi
     fi
     
