@@ -13,6 +13,9 @@ from functools import lru_cache
 from typing import Optional, Tuple, Dict, Any
 from functools import wraps
 from time import time
+import asyncio
+from asyncio import Semaphore
+from collections import deque
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,20 +29,21 @@ from plotly.subplots import make_subplots
 
 # Asynchronous function to load leaderboard data from the latest JSON file.  Handles file not found and other exceptions.
 async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
-    try:
-        if not os.path.exists(LEADERBOARD_LATEST):
-            return None
-
+    async with FILE_OP_SEMAPHORE:
         try:
-            async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
-                content = await f.read()
-                return json.loads(content)
-        except ImportError:
-            with open(LEADERBOARD_LATEST, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading leaderboard data: {e}")
-        return None
+            if not os.path.exists(LEADERBOARD_LATEST):
+                return None
+
+            try:
+                async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
+                    content = await f.read()
+                    return json.loads(content)
+            except ImportError:
+                with open(LEADERBOARD_LATEST, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading leaderboard data: {e}")
+            return None
 
 # Define file paths using environment variables for flexibility and maintainability.
 PATH_TO_LEADERBOARD_DATA = os.environ.get('PATH_TO_LEADERBOARD_DATA')
@@ -72,6 +76,31 @@ print("Bot initialized with command prefix '$'")
 # Define time zones for Eastern and Pacific Standard Time.
 EST = timezone('US/Eastern')
 PST = timezone('America/Los_Angeles')
+
+# Add concurrency control constants after the timezone definitions
+MAX_CONCURRENT_FILE_OPS = 3
+MAX_CONCURRENT_API_CALLS = 5
+FILE_OP_SEMAPHORE = Semaphore(MAX_CONCURRENT_FILE_OPS)
+API_SEMAPHORE = Semaphore(MAX_CONCURRENT_API_CALLS)
+TASK_QUEUE = deque()
+
+# Add task management functions
+async def queue_task(coro):
+    task = asyncio.create_task(coro)
+    TASK_QUEUE.append(task)
+    await task
+    TASK_QUEUE.remove(task)
+    return await task
+
+async def cleanup_tasks():
+    while TASK_QUEUE:
+        task = TASK_QUEUE.popleft()
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 # Function to extract and format user information from a Pandas DataFrame.
 def get_user_info(df, username):
@@ -179,8 +208,15 @@ class TimedCache:
 
 #Use the TimedCache to wrap the fetch_stock_data function, caching results for an hour.
 @TimedCache(ttl=3600)
-def fetch_stock_data(symbol: str, start_date, end_date):
-    return yf.download(symbol, start=start_date, end=end_date, progress=False)
+async def fetch_stock_data(symbol: str, start_date, end_date):
+    async with API_SEMAPHORE:
+        return await asyncio.to_thread(
+            yf.download, 
+            symbol, 
+            start=start_date, 
+            end=end_date, 
+            progress=False
+        )
 
 # Function to generate a Plotly graph showing a user's account value over time, along with the S&P 500 for comparison.
 def generate_money_graph(username):
@@ -555,171 +591,207 @@ def have_rankings_changed(previous_data, current_data):
 @tasks.loop(minutes=1)
 async def send_leaderboard():
     try:
+        global LAST_LEADERBOARD_UPDATE
         now = datetime.datetime.now(EST)
+        
+        # Skip weekends
         if now.weekday() >= 5:
             return
 
         market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
         market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
 
+        # Only proceed during market hours
         if not (market_open <= now <= market_close):
             return
 
+        # Check if it's market open or close (within 1 minute)
+        is_market_open = abs((now - market_open).total_seconds()) < 60
+        is_market_close = abs((now - market_close).total_seconds()) < 60
+        
+        # Check if 30 minutes have passed since last update
+        thirty_mins_passed = (LAST_LEADERBOARD_UPDATE is None or 
+                            (now - LAST_LEADERBOARD_UPDATE).total_seconds() >= 1800)
+
+        # Only proceed if one of our conditions is met
+        if not (is_market_open or is_market_close or thirty_mins_passed):
+            return
+
+        # Rest of the leaderboard update logic
         current_data = await load_leaderboard_data()
         if not current_data:
             return
 
-        snapshot_path = SNAPSHOT_PATH
-        previous_data = None
-        if os.path.exists(snapshot_path):
-            async with aiofiles.open(snapshot_path, 'r') as f:
-                content = await f.read()
-                previous_data = json.loads(content)
+        leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
+        if not leaderboard_channel:
+            return
 
-        is_market_open = abs((now - market_open).total_seconds()) < 60
-        is_market_close = abs((now - market_close).total_seconds()) < 60
-        rankings_changed = have_rankings_changed(previous_data, current_data)
+        permissions = leaderboard_channel.permissions_for(leaderboard_channel.guild.me)
+        if not permissions.send_messages or not permissions.embed_links:
+            return
 
-        if is_market_open or is_market_close or rankings_changed:
-            leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
-            if not leaderboard_channel:
-                return
+        df = pd.DataFrame.from_dict(current_data, orient="index")
+        df.reset_index(inplace=True)
+        df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
+        df.sort_values(by="Money In Account", ascending=False, inplace=True)
 
-            permissions = leaderboard_channel.permissions_for(leaderboard_channel.guild.me)
-            if not permissions.send_messages or not permissions.embed_links:
-                return
+        top_users = df.head(5)
+        description = ""
+        for idx, row in enumerate(top_users.iterrows(), 1):
+            _, row = row
+            money = float(row['Money In Account'])
+            description += f"**#{idx} - {row['Account Name']}**\n"
+            description += f"Money: ${money:,.2f}\n\n"
 
-            df = pd.DataFrame.from_dict(current_data, orient="index")
-            df.reset_index(inplace=True)
-            df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
-            df.sort_values(by="Money In Account", ascending=False, inplace=True)
+        embed = discord.Embed(
+            colour=get_embed_color(),
+            title="📊 Leaderboard Update",
+            description=description,
+            timestamp=get_pst_time(),
+        )
 
-            top_users = df.head(5)
-            description = ""
-            for idx, row in enumerate(top_users.iterrows(), 1):
-                _, row = row
-                money = float(row['Money In Account'])
-                description += f"**#{idx} - {row['Account Name']}**\n"
-                description += f"Money: ${money:,.2f}\n\n"
+        if is_market_open:
+            embed.set_footer(text="Market Open Update")
+        elif is_market_close:
+            embed.set_footer(text="Market Close Update")
+        else:
+            embed.set_footer(text="30 Minute Update")
 
-            embed = discord.Embed(
-                colour=get_embed_color(),
-                title="📊 Leaderboard Update!",
-                description=description,
-                timestamp=get_pst_time(),
-            )
-
-            graph_buffer = generate_leaderboard_graph(top_users)
-            if graph_buffer:
-                file = discord.File(graph_buffer, filename="leaderboard_graph.png")
-                embed.set_image(url="attachment://leaderboard_graph.png")
-                
-                if is_market_open:
-                    embed.set_footer(text="Market Open Update")
-                elif is_market_close:
-                    embed.set_footer(text="Market Close Update")
-                elif rankings_changed:
-                    embed.set_footer(text="Rankings Changed")
-
-                await leaderboard_channel.send(embed=embed, file=file)
-
-            async with aiofiles.open(snapshot_path, 'w') as f:
-                await f.write(json.dumps(current_data))
+        graph_buffer = generate_leaderboard_graph(top_users)
+        if graph_buffer:
+            file = discord.File(graph_buffer, filename="leaderboard_graph.png")
+            embed.set_image(url="attachment://leaderboard_graph.png")
+            await leaderboard_channel.send(embed=embed, file=file)
+            LAST_LEADERBOARD_UPDATE = now  # Update the timestamp after successful send
 
     except Exception as e:
         print(f"Error in send_leaderboard task: {str(e)}")
-        import traceback
         traceback.print_exc()
 
 #Background task to create a snapshot of the leaderboard at the start of each trading day (9:30 AM EST).
 @tasks.loop(time=datetime.time(hour=9, minute=30, tzinfo=EST))
 async def start_of_day():
     now = datetime.datetime.now(EST)
-    if now.weekday() < 5:
-        await create_morning_snapshot()
+    if now.weekday() < 5:  # Only run on weekdays
+        async with FILE_OP_SEMAPHORE:
+            try:
+                current_data = await load_leaderboard_data()
+                if current_data:
+                    async with aiofiles.open(MORNING_SNAPSHOT_PATH, 'w') as f:
+                        await f.write(json.dumps(current_data))
+                    print(f"Created morning snapshot at {now}")
+            except Exception as e:
+                print(f"Error creating morning snapshot: {e}")
+                import traceback
+                traceback.print_exc()
+
+@start_of_day.before_loop
+async def before_start_of_day():
+    await bot.wait_until_ready()
 
 #Background task to send a daily summary at the end of the trading day (4:00 PM EST).  Compares the morning snapshot to the end-of-day data.
 @tasks.loop(time=datetime.time(hour=16, minute=0, tzinfo=EST))
 async def send_daily_summary():
     now = datetime.datetime.now(EST)
-    if now.weekday() < 5:
-        try:
-            morning_snapshot_path = MORNING_SNAPSHOT_PATH
-            if not os.path.exists(morning_snapshot_path):
+    if now.weekday() >= 5:  # Skip weekends
+        return
+
+    try:
+        # Check if morning snapshot exists and load it
+        if not os.path.exists(MORNING_SNAPSHOT_PATH):
+            print("No morning snapshot found, skipping daily summary")
+            return
+
+        async with aiofiles.open(MORNING_SNAPSHOT_PATH, 'r') as f:
+            content = await f.read()
+            morning_data = json.loads(content)
+
+        current_data = await load_leaderboard_data()
+        if not current_data:
+            print("No current data available, skipping daily summary")
+            return
+
+        # Calculate stats only if we have both morning and current data
+        stats = calculate_daily_performance(morning_data, current_data)
+
+        # Only send summary if there are actual changes
+        if stats["total_trades"] > 0 or any(p["change_amount"] != 0 for p in stats["performance"]):
+            channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
+            if not channel:
+                print("Could not find leaderboard channel")
                 return
 
-            with open(morning_snapshot_path, "r") as f:
-                morning_data = json.load(f)
+            embed = discord.Embed(
+                colour=get_embed_color(),
+                title="📊 End of Day Trading Summary",
+                description=f"Market Close Summary for {now.strftime('%A, %B %d, %Y')}",
+                timestamp=get_pst_time(),
+            )
 
-            with open(LEADERBOARD_LATEST, "r") as f:
-                current_data = json.load(f)
-
-            stats = calculate_daily_performance(morning_data, current_data)
+            # Only add fields if there's meaningful data
+            embed.add_field(
+                name="📈 Market Activity",
+                value=f"Total Trades Today: {stats['total_trades']}\n",
+                inline=False,
+            )
 
             if stats["performance"]:
-                embed = discord.Embed(
-                    colour=get_embed_color(),
-                    title="📊 End of Day Trading Summary",
-                    description=f"Market Close Summary for {now.strftime('%A, %B %d, %Y')}",
-                    timestamp=get_pst_time(),
-                )
-
-                embed.add_field(
-                    name="📈 Market Activity",
-                    value=f"Total Trades Today: {stats['total_trades']}\n",
-                    inline=False,
-                )
-
                 top_text = "\n".join(
                     [
                         f"**{p['username']}**: {p['change_percent']:+.2f}% (${p['change_amount']:,.2f}) - {p['trades']} trades"
                         for p in stats["performance"][:3]
+                        if abs(p["change_percent"]) > 0.01 or p["trades"] > 0
                     ]
                 )
-                embed.add_field(name="🏆 Top Performers", value=top_text, inline=False)
+                if top_text:
+                    embed.add_field(name="🏆 Top Performers", value=top_text, inline=False)
 
                 bottom_text = "\n".join(
                     [
                         f"**{p['username']}**: {p['change_percent']:+.2f}% (${p['change_amount']:,.2f}) - {p['trades']} trades"
                         for p in stats["performance"][-3:]
+                        if abs(p["change_percent"]) > 0.01 or p["trades"] > 0
                     ]
                 )
+                if bottom_text:
+                    embed.add_field(name="📉 Needs Improvement", value=bottom_text, inline=False)
+
+            if stats["biggest_gain"]["username"] and abs(stats["biggest_gain"]["percent"]) > 0.01:
                 embed.add_field(
-                    name="📉 Needs Improvement", value=bottom_text, inline=False
+                    name="🚀 Biggest Gain",
+                    value=f"**{stats['biggest_gain']['username']}**\n{stats['biggest_gain']['percent']:+.2f}% (${stats['biggest_gain']['amount']:,.2f})",
+                    inline=True,
                 )
 
-                if stats["biggest_gain"]["username"]:
-                    embed.add_field(
-                        name="🚀 Biggest Gain",
-                        value=f"**{stats['biggest_gain']['username']}**\n{stats['biggest_gain']['percent']:+.2f}% (${stats['biggest_gain']['amount']:,.2f})",
-                        inline=True,
-                    )
-
-                if stats["biggest_loss"]["username"]:
-                    embed.add_field(
-                        name="💥 Biggest Loss",
-                        value=f"**{stats['biggest_loss']['username']}**\n{stats['biggest_loss']['percent']:+.2f}% (${stats['biggest_loss']['amount']:,.2f})",
-                        inline=True,
-                    )
-
-                active_text = "\n".join(
-                    [
-                        f"**{p['username']}**: {p['trades']} trades"
-                        for p in stats["most_active"]
-                    ]
-                )
+            if stats["biggest_loss"]["username"] and abs(stats["biggest_loss"]["percent"]) > 0.01:
                 embed.add_field(
-                    name="⚡ Most Active Traders", value=active_text, inline=False
+                    name="💥 Biggest Loss",
+                    value=f"**{stats['biggest_loss']['username']}**\n{stats['biggest_loss']['percent']:+.2f}% (${stats['biggest_loss']['amount']:,.2f})",
+                    inline=True,
                 )
 
-                channel = bot.get_channel(
-                    int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard"))
-                )
-                if channel:
-                    await channel.send(embed=embed)
+            active_text = "\n".join(
+                [f"**{p['username']}**: {p['trades']} trades" for p in stats["most_active"] if p["trades"] > 0]
+            )
+            if active_text:
+                embed.add_field(name="⚡ Most Active Traders", value=active_text, inline=False)
 
+            if len(embed.fields) > 1:  # Only send if there's meaningful data
+                await channel.send(embed=embed)
+            else:
+                print("No meaningful changes to report in daily summary")
+
+        # Clean up the morning snapshot after sending the summary
+        try:
+            os.remove(MORNING_SNAPSHOT_PATH)
+            print("Removed morning snapshot file")
         except Exception as e:
-            print(f"Error in send_daily_summary: {str(e)}")
+            print(f"Error removing morning snapshot: {e}")
+
+    except Exception as e:
+        print(f"Error in send_daily_summary: {e}")
+        import traceback
+        traceback.print_exc()
 
 #Before loop function for the send_daily_summary task to ensure the bot is ready before starting the task.
 @send_daily_summary.before_loop
@@ -800,20 +872,21 @@ import aiofiles
 
 #Function to load leaderboard data asynchronously, handling potential errors.
 async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
-    try:
-        if not os.path.exists(LEADERBOARD_LATEST):
-            return None
-
+    async with FILE_OP_SEMAPHORE:
         try:
-            async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
-                content = await f.read()
-                return json.loads(content)
-        except ImportError:
-            with open(LEADERBOARD_LATEST, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading leaderboard data: {e}")
-        return None
+            if not os.path.exists(LEADERBOARD_LATEST):
+                return None
+
+            try:
+                async with aiofiles.open(LEADERBOARD_LATEST, mode='r') as f:
+                    content = await f.read()
+                    return json.loads(content)
+            except ImportError:
+                with open(LEADERBOARD_LATEST, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading leaderboard data: {e}")
+            return None
 
 
 #Function to check if the top 5 rankings have changed between two leaderboard datasets.
@@ -844,38 +917,10 @@ async def on_ready():
     try:
         os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
         
-        leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
-        if leaderboard_channel:
-            current_data = await load_leaderboard_data()
-            if current_data:
-                df = pd.DataFrame.from_dict(current_data, orient="index")
-                df.reset_index(inplace=True)
-                df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
-                df.sort_values(by="Money In Account", ascending=False, inplace=True)
-
-                top_users = df.head(5)
-                description = ""
-                for idx, row in enumerate(top_users.iterrows(), 1):
-                    _, row = row
-                    money = float(row['Money In Account'])
-                    description += f"**#{idx} - {row['Account Name']}**\n"
-                    description += f"Money: ${money:,.2f}\n\n"
-
-                embed = discord.Embed(
-                    colour=get_embed_color(),
-                    title="📊 Initial Leaderboard",
-                    description=description,
-                    timestamp=get_pst_time(),
-                )
-                
-                graph_buffer = generate_leaderboard_graph(top_users)
-                if graph_buffer:
-                    file = discord.File(graph_buffer, filename="leaderboard_graph.png")
-                    embed.set_image(url="attachment://leaderboard_graph.png")
-                    await leaderboard_channel.send(embed=embed, file=file)
-                else:
-                    await leaderboard_channel.send(embed=embed)
-                
+        # Register cleanup for graceful shutdown
+        bot.loop.create_task(cleanup_tasks())
+        
+        # Start background tasks
         send_leaderboard.start()
         start_of_day.start()
         send_daily_summary.start()
@@ -885,7 +930,6 @@ async def on_ready():
 
     except Exception as e:
         print(f"Error in on_ready: {e}")
-        import traceback
         traceback.print_exc()
 
 #Run the bot.  Handles potential errors during bot execution.
@@ -893,3 +937,130 @@ try:
     bot.run(DISCORD_BOT_TOKEN)
 except Exception as e:
     print(f"Error running the bot: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Add graceful shutdown handler
+async def close_bot():
+    print("Shutting down bot...")
+    await cleanup_tasks()
+    await bot.close()
+
+# Update the main bot run with graceful shutdown
+if __name__ == "__main__":
+    try:
+        bot.run(DISCORD_BOT_TOKEN)
+    except KeyboardInterrupt:
+        asyncio.run(close_bot())
+    except Exception as e:
+        print(f"Error running the bot: {e}")
+        traceback.print_exc()
+
+# ...existing code...
+
+# Add after the other constant definitions
+LAST_LEADERBOARD_UPDATE = None
+
+# Replace the send_leaderboard task with this updated version
+@tasks.loop(minutes=1)
+async def send_leaderboard():
+    try:
+        global LAST_LEADERBOARD_UPDATE
+        now = datetime.datetime.now(EST)
+        
+        # Skip weekends
+        if now.weekday() >= 5:
+            return
+
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        # Only proceed during market hours
+        if not (market_open <= now <= market_close):
+            return
+
+        # Check if it's market open or close (within 1 minute)
+        is_market_open = abs((now - market_open).total_seconds()) < 60
+        is_market_close = abs((now - market_close).total_seconds()) < 60
+        
+        # Check if 30 minutes have passed since last update
+        thirty_mins_passed = (LAST_LEADERBOARD_UPDATE is None or 
+                            (now - LAST_LEADERBOARD_UPDATE).total_seconds() >= 1800)
+
+        # Only proceed if one of our conditions is met
+        if not (is_market_open or is_market_close or thirty_mins_passed):
+            return
+
+        # Rest of the leaderboard update logic
+        current_data = await load_leaderboard_data()
+        if not current_data:
+            return
+
+        leaderboard_channel = bot.get_channel(int(os.environ.get("DISCORD_CHANNEL_ID_Leaderboard")))
+        if not leaderboard_channel:
+            return
+
+        permissions = leaderboard_channel.permissions_for(leaderboard_channel.guild.me)
+        if not permissions.send_messages or not permissions.embed_links:
+            return
+
+        df = pd.DataFrame.from_dict(current_data, orient="index")
+        df.reset_index(inplace=True)
+        df.columns = ["Account Name", "Money In Account", "Investopedia Link", "Stocks Invested In"]
+        df.sort_values(by="Money In Account", ascending=False, inplace=True)
+
+        top_users = df.head(5)
+        description = ""
+        for idx, row in enumerate(top_users.iterrows(), 1):
+            _, row = row
+            money = float(row['Money In Account'])
+            description += f"**#{idx} - {row['Account Name']}**\n"
+            description += f"Money: ${money:,.2f}\n\n"
+
+        embed = discord.Embed(
+            colour=get_embed_color(),
+            title="📊 Leaderboard Update",
+            description=description,
+            timestamp=get_pst_time(),
+        )
+
+        if is_market_open:
+            embed.set_footer(text="Market Open Update")
+        elif is_market_close:
+            embed.set_footer(text="Market Close Update")
+        else:
+            embed.set_footer(text="30 Minute Update")
+
+        graph_buffer = generate_leaderboard_graph(top_users)
+        if graph_buffer:
+            file = discord.File(graph_buffer, filename="leaderboard_graph.png")
+            embed.set_image(url="attachment://leaderboard_graph.png")
+            await leaderboard_channel.send(embed=embed, file=file)
+            LAST_LEADERBOARD_UPDATE = now  # Update the timestamp after successful send
+
+    except Exception as e:
+        print(f"Error in send_leaderboard task: {str(e)}")
+        traceback.print_exc()
+
+# Update on_ready to remove initial leaderboard
+@bot.event
+async def on_ready():
+    try:
+        os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+        
+        # Register cleanup for graceful shutdown
+        bot.loop.create_task(cleanup_tasks())
+        
+        # Start background tasks
+        send_leaderboard.start()
+        start_of_day.start()
+        send_daily_summary.start()
+
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+
+    except Exception as e:
+        print(f"Error in on_ready: {e}")
+        traceback.print_exc()
+
+# Remove the send_initial_leaderboard function as it's no longer needed
