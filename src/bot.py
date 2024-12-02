@@ -16,6 +16,7 @@ from time import time
 import asyncio
 from asyncio import Semaphore
 from collections import deque
+import traceback
 
 # Load environment variables from .env file
 load_dotenv()
@@ -591,7 +592,6 @@ def have_rankings_changed(previous_data, current_data):
 @tasks.loop(minutes=1)
 async def send_leaderboard():
     try:
-        global LAST_LEADERBOARD_UPDATE
         now = datetime.datetime.now(EST)
         
         # Skip weekends
@@ -610,8 +610,9 @@ async def send_leaderboard():
         is_market_close = abs((now - market_close).total_seconds()) < 60
         
         # Check if 30 minutes have passed since last update
-        thirty_mins_passed = (LAST_LEADERBOARD_UPDATE is None or 
-                            (now - LAST_LEADERBOARD_UPDATE).total_seconds() >= 1800)
+        last_update = get_last_update_time()
+        thirty_mins_passed = (last_update is None or 
+                            (now - last_update).total_seconds() >= 1800)
 
         # Only proceed if one of our conditions is met
         if not (is_market_open or is_market_close or thirty_mins_passed):
@@ -662,7 +663,7 @@ async def send_leaderboard():
             file = discord.File(graph_buffer, filename="leaderboard_graph.png")
             embed.set_image(url="attachment://leaderboard_graph.png")
             await leaderboard_channel.send(embed=embed, file=file)
-            LAST_LEADERBOARD_UPDATE = now  # Update the timestamp after successful send
+            save_last_update_time()  # Update the timestamp after successful send
 
     except Exception as e:
         print(f"Error in send_leaderboard task: {str(e)}")
@@ -1064,3 +1065,85 @@ async def on_ready():
         traceback.print_exc()
 
 # Remove the send_initial_leaderboard function as it's no longer needed
+
+# Update constants section
+LAST_UPDATE_FILE = os.path.join(SNAPSHOTS_DIR, "last_update.txt")
+
+def save_last_update_time():
+    try:
+        with open(LAST_UPDATE_FILE, 'w') as f:
+            f.write(datetime.datetime.now(EST).isoformat())
+    except Exception as e:
+        print(f"Error saving last update time: {e}")
+
+def get_last_update_time():
+    try:
+        if os.path.exists(LAST_UPDATE_FILE):
+            with open(LAST_UPDATE_FILE, 'r') as f:
+                timestamp_str = f.read().strip()
+                return datetime.datetime.fromisoformat(timestamp_str)
+    except Exception as e:
+        print(f"Error reading last update time: {e}")
+    return None
+
+# Replace the send_leaderboard task
+@tasks.loop(minutes=1)
+async def send_leaderboard():
+    try:
+        now = datetime.datetime.now(EST)
+        
+        # Skip weekends
+        if now.weekday() >= 5:
+            return
+
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        # Only proceed during market hours
+        if not (market_open <= now <= market_close):
+            return
+
+        # Check if it's market open or close (within 1 minute)
+        is_market_open = abs((now - market_open).total_seconds()) < 60
+        is_market_close = abs((now - market_close).total_seconds()) < 60
+        
+        # Check if 30 minutes have passed since last update
+        last_update = get_last_update_time()
+        thirty_mins_passed = (last_update is None or 
+                            (now - last_update).total_seconds() >= 1800)
+
+        # Only proceed if one of our conditions is met
+        if not (is_market_open or is_market_close or thirty_mins_passed):
+            return
+
+        # Rest of the leaderboard update logic...
+        # ...existing leaderboard update code...
+
+        # After successfully sending the update, save the timestamp
+        save_last_update_time()
+
+    except Exception as e:
+        print(f"Error in send_leaderboard task: {str(e)}")
+        traceback.print_exc()
+
+# Update on_ready to ensure snapshots directory exists
+@bot.event
+async def on_ready():
+    try:
+        os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+        
+        # Register cleanup for graceful shutdown
+        bot.loop.create_task(cleanup_tasks())
+        
+        # Start background tasks
+        send_leaderboard.start()
+        start_of_day.start()
+        send_daily_summary.start()
+
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+
+    except Exception as e:
+        print(f"Error in on_ready: {e}")
+        traceback.print_exc()
+
