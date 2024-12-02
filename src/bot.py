@@ -699,6 +699,9 @@ async def send_leaderboard():
             await leaderboard_channel.send(embed=embed, file=file)
             save_last_update_time()  # Update the timestamp after successful send
 
+        # Also trigger stock changes check
+        await compare_stock_changes(leaderboard_channel)
+
     except Exception as e:
         print(f"Error in send_leaderboard task: {str(e)}")
         traceback.print_exc()
@@ -1178,6 +1181,3 @@ async def on_ready():
         print(f"Synced {len(synced)} command(s)")
 
     except Exception as e:
-        print(f"Error in on_ready: {e}")
-        traceback.print_exc()
-
