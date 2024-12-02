@@ -27,6 +27,15 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
+def get_last_update_time():
+    try:
+        if os.path.exists(LAST_UPDATE_FILE):
+            with open(LAST_UPDATE_FILE, 'r') as f:
+                timestamp_str = f.read().strip()
+                return datetime.datetime.fromisoformat(timestamp_str)
+    except Exception as e:
+        print(f"Error reading last update time: {e}")
+    return None
 
 # Asynchronous function to load leaderboard data from the latest JSON file.  Handles file not found and other exceptions.
 async def load_leaderboard_data() -> Optional[Dict[str, Any]]:
