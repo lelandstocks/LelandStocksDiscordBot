@@ -1181,3 +1181,6 @@ async def on_ready():
         print(f"Synced {len(synced)} command(s)")
 
     except Exception as e:
+        print(f"Error in on_ready: {e}")
+        traceback.print_exc()
+
