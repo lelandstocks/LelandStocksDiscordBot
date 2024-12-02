@@ -64,9 +64,34 @@ USERNAMES_PATH = os.path.join(PATH_TO_LEADERBOARD_DATA, 'backend/portfolios/user
 SNAPSHOTS_DIR = "./snapshots"
 SNAPSHOT_PATH = os.path.join(SNAPSHOTS_DIR, "leaderboard-snapshot.json")
 MORNING_SNAPSHOT_PATH = os.path.join(SNAPSHOTS_DIR, "morning-snapshot.json")
+LAST_UPDATE_FILE = os.path.join(SNAPSHOTS_DIR, "last_update.txt")
 
-# Create snapshots directory if it doesn't exist.
+# Create necessary directories
 os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+
+# Initialize last update time functions
+def save_last_update_time():
+    try:
+        os.makedirs(os.path.dirname(LAST_UPDATE_FILE), exist_ok=True)
+        with open(LAST_UPDATE_FILE, 'w') as f:
+            f.write(datetime.datetime.now(EST).isoformat())
+    except Exception as e:
+        print(f"Error saving last update time: {e}")
+        traceback.print_exc()
+
+def get_last_update_time():
+    try:
+        if os.path.exists(LAST_UPDATE_FILE):
+            with open(LAST_UPDATE_FILE, 'r') as f:
+                timestamp_str = f.read().strip()
+                return datetime.datetime.fromisoformat(timestamp_str)
+        # If file doesn't exist, create it with current time
+        save_last_update_time()
+        return datetime.datetime.now(EST)
+    except Exception as e:
+        print(f"Error reading last update time: {e}")
+        # Return a timestamp from 30 minutes ago to trigger an update
+        return datetime.datetime.now(EST) - datetime.timedelta(minutes=30)
 
 # Set up Discord bot intents.  We need message content and guilds for this bot.
 intents = discord.Intents.default()
